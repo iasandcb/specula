@@ -1,0 +1,48 @@
+import Foundation
+
+public struct RemoteDisplayMode: Codable, Identifiable, Sendable {
+    public let id: UInt32
+    public let width: Int
+    public let height: Int
+    public let pixelWidth: Int
+    public let pixelHeight: Int
+    public init(id: UInt32, width: Int, height: Int, pixelWidth: Int, pixelHeight: Int) {
+        self.id = id; self.width = width; self.height = height
+        self.pixelWidth = pixelWidth; self.pixelHeight = pixelHeight
+    }
+    public var title: String { "\(width) × \(height)" + (pixelWidth > width ? " · Retina" : "") }
+}
+public struct DisplaySnapshot: Codable, Sendable {
+    public let current: RemoteDisplayMode
+    public let modes: [RemoteDisplayMode]
+    public init(current: RemoteDisplayMode, modes: [RemoteDisplayMode]) { self.current = current; self.modes = modes }
+}
+public struct PairDisplayRequest: Codable { public let code: String; public init(code: String) { self.code = code } }
+public struct PairDisplayResponse: Codable { public let token: String; public init(token: String) { self.token = token } }
+public struct ChangeDisplayRequest: Codable { public let modeID: UInt32; public init(modeID: UInt32) { self.modeID = modeID } }
+public struct DisplayFailure: Codable { public let message: String; public init(_ message: String) { self.message = message } }
+
+/// A missed heartbeat restores the original mode even when the phone disappears.
+public struct DisplayLease {
+    public private(set) var originalModeID: UInt32?
+    public private(set) var expiresAt: Date?
+    public init() {}
+    public mutating func changed(from modeID: UInt32, now: Date) {
+        if originalModeID == nil { originalModeID = modeID }
+        renew(now: now)
+    }
+    public mutating func renew(now: Date) { if originalModeID != nil { expiresAt = now.addingTimeInterval(60) } }
+    public func expired(now: Date) -> Bool { expiresAt.map { now >= $0 } ?? false }
+    public mutating func clear() { originalModeID = nil; expiresAt = nil }
+}
+
+public enum DisplayPeer {
+    public static func isAllowed(_ address: String) -> Bool {
+        let plain = address.lowercased().split(separator: "%", maxSplits: 1).first.map(String.init) ?? ""
+        if plain == "::1" || plain.hasPrefix("fd7a:115c:a1e0:") { return true }
+        let ipv4 = plain.hasPrefix("::ffff:") ? String(plain.dropFirst(7)) : plain
+        let parts = ipv4.split(separator: ".", omittingEmptySubsequences: false).compactMap { Int($0) }
+        guard parts.count == 4, parts.allSatisfy({ (0...255).contains($0) }) else { return false }
+        return parts[0] == 127 || (parts[0] == 100 && (64...127).contains(parts[1]))
+    }
+}

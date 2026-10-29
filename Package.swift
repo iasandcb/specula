@@ -1,0 +1,3 @@
+// swift-tools-version: 6.0
+import PackageDescription
+let package = Package(name: "MacRemote", platforms: [.macOS(.v14), .iOS(.v17)], products: [.executable(name: "MacDisplayHelper", targets: ["MacDisplayHelper"]), .library(name: "RemoteCore", targets: ["RemoteCore"])], dependencies: [.package(url: "https://github.com/attaswift/BigInt.git", exact: "5.7.0")], targets: [.target(name: "DisplaySupport"), .executableTarget(name: "MacDisplayHelper", dependencies: ["DisplaySupport"]), .target(name: "RemoteCore", dependencies: [.product(name: "BigInt", package: "BigInt")]), .testTarget(name: "RemoteCoreTests", dependencies: ["RemoteCore", "DisplaySupport"])], swiftLanguageModes: [.v5])
