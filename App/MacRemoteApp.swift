@@ -95,7 +95,7 @@ struct RemoteView: View {
     @State private var displaySettings = false
     @Environment(\.verticalSizeClass) private var verticalSizeClass
     @Environment(\.scenePhase) private var phase
-    private var fullScreen: Bool { session.active && verticalSizeClass == .compact }
+    private var fullScreen: Bool { session.active && (verticalSizeClass == .compact || UIDevice.current.userInterfaceIdiom == .pad) }
     var body: some View {
         NavigationStack {
             if fullScreen {

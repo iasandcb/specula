@@ -1,36 +1,240 @@
 // !$*UTF8*$!
-{ archiveVersion = 1; classes = {}; objectVersion = 56; objects = {
-000000000000000000000064 = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "App/MacRemoteApp.swift"; sourceTree = SOURCE_ROOT; };
-0000000000000000000000C8 = { isa = PBXBuildFile; fileRef = 000000000000000000000064; };
-000000000000000000000065 = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "App/ScreenSurface.swift"; sourceTree = SOURCE_ROOT; };
-0000000000000000000000C9 = { isa = PBXBuildFile; fileRef = 000000000000000000000065; };
-000000000000000000000066 = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Sources/RemoteCore/Wire.swift"; sourceTree = SOURCE_ROOT; };
-0000000000000000000000CA = { isa = PBXBuildFile; fileRef = 000000000000000000000066; };
-000000000000000000000067 = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Sources/RemoteCore/RFBClient.swift"; sourceTree = SOURCE_ROOT; };
-0000000000000000000000CB = { isa = PBXBuildFile; fileRef = 000000000000000000000067; };
-000000000000000000000001 = { isa = PBXProject; attributes = { LastUpgradeCheck = 2700; }; buildConfigurationList = 00000000000000000000000A; compatibilityVersion = "Xcode 14.0"; developmentRegion = en; knownRegions = (en, Base); mainGroup = 000000000000000000000002; productRefGroup = 000000000000000000000003; projectDirPath = ""; projectRoot = ""; packageReferences = (00000000000000000000012C); targets = (000000000000000000000004); };
-000000000000000000000002 = { isa = PBXGroup; children = (000000000000000000000140,000000000000000000000141,000000000000000000000131,00000000000000000000012F,000000000000000000000064,000000000000000000000065,000000000000000000000066,000000000000000000000067,000000000000000000000003); sourceTree = "<group>"; };
-000000000000000000000003 = { isa = PBXGroup; children = (000000000000000000000005); name = Products; sourceTree = "<group>"; };
-000000000000000000000004 = { isa = PBXNativeTarget; buildConfigurationList = 00000000000000000000000B; buildPhases = (000000000000000000000006,000000000000000000000007,000000000000000000000008); buildRules = (); dependencies = (); packageProductDependencies = (00000000000000000000012D); name = MacRemote; productName = MacRemote; productReference = 000000000000000000000005; productType = "com.apple.product-type.application"; };
-000000000000000000000005 = { isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = MacRemote.app; sourceTree = BUILT_PRODUCTS_DIR; };
-000000000000000000000006 = { isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (000000000000000000000142,000000000000000000000143,000000000000000000000130,0000000000000000000000C8,0000000000000000000000C9,0000000000000000000000CA,0000000000000000000000CB); runOnlyForDeploymentPostprocessing = 0; };
-000000000000000000000007 = { isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = (00000000000000000000012E); runOnlyForDeploymentPostprocessing = 0; };
-000000000000000000000008 = { isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = (000000000000000000000132); runOnlyForDeploymentPostprocessing = 0; };
-00000000000000000000000A = { isa = XCConfigurationList; buildConfigurations = (00000000000000000000000C,00000000000000000000000D); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
-00000000000000000000000B = { isa = XCConfigurationList; buildConfigurations = (00000000000000000000000E,00000000000000000000000F); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
-00000000000000000000000C = { isa = XCBuildConfiguration; buildSettings = { SDKROOT = iphoneos; IPHONEOS_DEPLOYMENT_TARGET = 17.0; SWIFT_VERSION = 5.0; CLANG_ENABLE_MODULES = YES; }; name = Debug; };
-00000000000000000000000D = { isa = XCBuildConfiguration; buildSettings = { SDKROOT = iphoneos; IPHONEOS_DEPLOYMENT_TARGET = 17.0; SWIFT_VERSION = 5.0; CLANG_ENABLE_MODULES = YES; }; name = Release; };
-00000000000000000000000E = { isa = XCBuildConfiguration; buildSettings = { PRODUCT_BUNDLE_IDENTIFIER = com.alex.MacRemote; PRODUCT_NAME = "$(TARGET_NAME)"; INFOPLIST_FILE = App/Info.plist; ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon; TARGETED_DEVICE_FAMILY = 1; CODE_SIGN_STYLE = Automatic; SWIFT_OPTIMIZATION_LEVEL = "-Onone"; }; name = Debug; };
-00000000000000000000000F = { isa = XCBuildConfiguration; buildSettings = { PRODUCT_BUNDLE_IDENTIFIER = com.alex.MacRemote; PRODUCT_NAME = "$(TARGET_NAME)"; INFOPLIST_FILE = App/Info.plist; ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon; TARGETED_DEVICE_FAMILY = 1; CODE_SIGN_STYLE = Automatic; SWIFT_OPTIMIZATION_LEVEL = "-O"; }; name = Release; };
-00000000000000000000012C = { isa = XCRemoteSwiftPackageReference; repositoryURL = "https://github.com/attaswift/BigInt.git"; requirement = { kind = exactVersion; version = 5.7.0; }; };
-00000000000000000000012D = { isa = XCSwiftPackageProductDependency; package = 00000000000000000000012C; productName = BigInt; };
-00000000000000000000012E = { isa = PBXBuildFile; productRef = 00000000000000000000012D; };
-00000000000000000000012F = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/RemoteCore/ARD.swift; sourceTree = SOURCE_ROOT; };
-000000000000000000000130 = { isa = PBXBuildFile; fileRef = 00000000000000000000012F; };
-000000000000000000000131 = { isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = App/Assets.xcassets; sourceTree = SOURCE_ROOT; };
-000000000000000000000132 = { isa = PBXBuildFile; fileRef = 000000000000000000000131; };
-000000000000000000000140 = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = App/DisplaySettings.swift; sourceTree = SOURCE_ROOT; };
-000000000000000000000141 = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/DisplaySupport/DisplayMessages.swift; sourceTree = SOURCE_ROOT; };
-000000000000000000000142 = { isa = PBXBuildFile; fileRef = 000000000000000000000140; };
-000000000000000000000143 = { isa = PBXBuildFile; fileRef = 000000000000000000000141; };
-}; rootObject = 000000000000000000000001; }
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 56;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		0000000000000000000000C8 /* App/MacRemoteApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000064 /* App/MacRemoteApp.swift */; };
+		0000000000000000000000C9 /* App/ScreenSurface.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000065 /* App/ScreenSurface.swift */; };
+		0000000000000000000000CA /* Sources/RemoteCore/Wire.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000066 /* Sources/RemoteCore/Wire.swift */; };
+		0000000000000000000000CB /* Sources/RemoteCore/RFBClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000067 /* Sources/RemoteCore/RFBClient.swift */; };
+		00000000000000000000012E /* BigInt in Frameworks */ = {isa = PBXBuildFile; productRef = 00000000000000000000012D /* BigInt */; };
+		000000000000000000000130 /* Sources/RemoteCore/ARD.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00000000000000000000012F /* Sources/RemoteCore/ARD.swift */; };
+		000000000000000000000132 /* App/Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000131 /* App/Assets.xcassets */; };
+		000000000000000000000142 /* App/DisplaySettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000140 /* App/DisplaySettings.swift */; };
+		000000000000000000000143 /* Sources/DisplaySupport/DisplayMessages.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000141 /* Sources/DisplaySupport/DisplayMessages.swift */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		000000000000000000000005 /* MacRemote.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = MacRemote.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		000000000000000000000064 /* App/MacRemoteApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = App/MacRemoteApp.swift; sourceTree = SOURCE_ROOT; };
+		000000000000000000000065 /* App/ScreenSurface.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = App/ScreenSurface.swift; sourceTree = SOURCE_ROOT; };
+		000000000000000000000066 /* Sources/RemoteCore/Wire.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/RemoteCore/Wire.swift; sourceTree = SOURCE_ROOT; };
+		000000000000000000000067 /* Sources/RemoteCore/RFBClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/RemoteCore/RFBClient.swift; sourceTree = SOURCE_ROOT; };
+		00000000000000000000012F /* Sources/RemoteCore/ARD.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/RemoteCore/ARD.swift; sourceTree = SOURCE_ROOT; };
+		000000000000000000000131 /* App/Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = App/Assets.xcassets; sourceTree = SOURCE_ROOT; };
+		000000000000000000000140 /* App/DisplaySettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = App/DisplaySettings.swift; sourceTree = SOURCE_ROOT; };
+		000000000000000000000141 /* Sources/DisplaySupport/DisplayMessages.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/DisplaySupport/DisplayMessages.swift; sourceTree = SOURCE_ROOT; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		000000000000000000000007 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				00000000000000000000012E /* BigInt in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		000000000000000000000002 = {
+			isa = PBXGroup;
+			children = (
+				000000000000000000000140 /* App/DisplaySettings.swift */,
+				000000000000000000000141 /* Sources/DisplaySupport/DisplayMessages.swift */,
+				000000000000000000000131 /* App/Assets.xcassets */,
+				00000000000000000000012F /* Sources/RemoteCore/ARD.swift */,
+				000000000000000000000064 /* App/MacRemoteApp.swift */,
+				000000000000000000000065 /* App/ScreenSurface.swift */,
+				000000000000000000000066 /* Sources/RemoteCore/Wire.swift */,
+				000000000000000000000067 /* Sources/RemoteCore/RFBClient.swift */,
+				000000000000000000000003 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		000000000000000000000003 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				000000000000000000000005 /* MacRemote.app */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		000000000000000000000004 /* MacRemote */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 00000000000000000000000B /* Build configuration list for PBXNativeTarget "MacRemote" */;
+			buildPhases = (
+				000000000000000000000006 /* Sources */,
+				000000000000000000000007 /* Frameworks */,
+				000000000000000000000008 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = MacRemote;
+			packageProductDependencies = (
+				00000000000000000000012D /* BigInt */,
+			);
+			productName = MacRemote;
+			productReference = 000000000000000000000005 /* MacRemote.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		000000000000000000000001 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				LastUpgradeCheck = 2700;
+			};
+			buildConfigurationList = 00000000000000000000000A /* Build configuration list for PBXProject "MacRemote" */;
+			compatibilityVersion = "Xcode 14.0";
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+			);
+			mainGroup = 000000000000000000000002;
+			packageReferences = (
+				00000000000000000000012C /* XCRemoteSwiftPackageReference "BigInt" */,
+			);
+			productRefGroup = 000000000000000000000003 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				000000000000000000000004 /* MacRemote */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		000000000000000000000008 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				000000000000000000000132 /* App/Assets.xcassets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		000000000000000000000006 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				000000000000000000000142 /* App/DisplaySettings.swift in Sources */,
+				000000000000000000000143 /* Sources/DisplaySupport/DisplayMessages.swift in Sources */,
+				000000000000000000000130 /* Sources/RemoteCore/ARD.swift in Sources */,
+				0000000000000000000000C8 /* App/MacRemoteApp.swift in Sources */,
+				0000000000000000000000C9 /* App/ScreenSurface.swift in Sources */,
+				0000000000000000000000CA /* Sources/RemoteCore/Wire.swift in Sources */,
+				0000000000000000000000CB /* Sources/RemoteCore/RFBClient.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		00000000000000000000000C /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CLANG_ENABLE_MODULES = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				SDKROOT = iphoneos;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+		00000000000000000000000D /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CLANG_ENABLE_MODULES = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				SDKROOT = iphoneos;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
+		00000000000000000000000E /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = RZUH4T3FCB;
+				INFOPLIST_FILE = App/Info.plist;
+				PRODUCT_BUNDLE_IDENTIFIER = com.alex.MacRemote;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		00000000000000000000000F /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = RZUH4T3FCB;
+				INFOPLIST_FILE = App/Info.plist;
+				PRODUCT_BUNDLE_IDENTIFIER = com.alex.MacRemote;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		00000000000000000000000A /* Build configuration list for PBXProject "MacRemote" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				00000000000000000000000C /* Debug */,
+				00000000000000000000000D /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		00000000000000000000000B /* Build configuration list for PBXNativeTarget "MacRemote" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				00000000000000000000000E /* Debug */,
+				00000000000000000000000F /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		00000000000000000000012C /* XCRemoteSwiftPackageReference "BigInt" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/attaswift/BigInt.git";
+			requirement = {
+				kind = exactVersion;
+				version = 5.7.0;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		00000000000000000000012D /* BigInt */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 00000000000000000000012C /* XCRemoteSwiftPackageReference "BigInt" */;
+			productName = BigInt;
+		};
+/* End XCSwiftPackageProductDependency section */
+	};
+	rootObject = 000000000000000000000001 /* Project object */;
+}
