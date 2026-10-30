@@ -3,16 +3,21 @@ import Network
 import BigInt
 import CryptoKit
 import CommonCrypto
+import os
 @testable import RemoteCore
 
 final class SessionTests: XCTestCase {
     func testFragmentedHandshakeAuthenticationAndFramebuffer() async throws { try await session(account: false) }
     func testMacAccountLoginReachesFramebuffer() async throws { try await session(account: true) }
+    func testZRLEMixedWithRawAndResizeKeepsCompressionDictionary() async throws {
+        try await session(account: false, compressed: true)
+    }
 
-    private func session(account: Bool) async throws {
+    private func session(account: Bool, compressed: Bool = false) async throws {
         let listener = try NWListener(using: .tcp, on: .any)
         let serverFinished = expectation(description: "server verified client handshake")
         let receivedFrame = expectation(description: "client decoded frame")
+        receivedFrame.expectedFulfillmentCount = compressed ? 4 : 1
         let ready = expectation(description: "client initialized")
         let queue = DispatchQueue(label: "test.rfb")
         listener.newConnectionHandler = { connection in
@@ -43,14 +48,40 @@ final class SessionTests: XCTestCase {
                     try await self.send(connection, Data([0,2,0,1] + format + [0,0,0,4] + Array("Test".utf8)))
                     let pixelFormat = try await self.read(connection, 20)
                     XCTAssertEqual(pixelFormat, Data([0,0,0,0] + format))
-                    let encodings = try await self.read(connection, 12)
-                    XCTAssertEqual(encodings, Data([2,0,0,2,0,0,0,0,255,255,255,33]))
+                    let encodings = try await self.read(connection, 16)
+                    XCTAssertEqual(encodings, Data([2,0,0,3,0,0,0,16,0,0,0,0,255,255,255,33]))
                     let updateRequest = try await self.read(connection, 10)
                     XCTAssertEqual(updateRequest, Data([3,0,0,0,0,0,0,2,0,1]))
-                    // A 2×1 raw rectangle: red, green. Padding must become opaque alpha.
-                    try await self.send(connection, Data([0,0,0,1, 0,0,0,0,0,2,0,1,0,0,0,0, 255,0,0,0,0,255,0,0]))
+                    let compressor = try ZRLETestCompressor()
+                    if compressed {
+                        // Raw red at x=0 and ZRLE green at x=1 in the same update.
+                        let green = try compressor.compress([1,0,255,0])
+                        try await self.send(connection, Data([0,0,0,2, 0,0,0,0,0,1,0,1,0,0,0,0, 255,0,0,0]))
+                        let rectangle = Data([0,1,0,0,0,1,0,1,0,0,0,16] + Wire.u32(UInt32(green.count))) + green
+                        // Fragment both the length prefix and compressed bytes across sends.
+                        for chunk in stride(from: 0, to: rectangle.count, by: 3) {
+                            try await self.send(connection, Data(rectangle[chunk..<min(chunk + 3, rectangle.count)]))
+                        }
+                    } else {
+                        // A 2×1 raw rectangle: red, green. Padding must become opaque alpha.
+                        try await self.send(connection, Data([0,0,0,1, 0,0,0,0,0,2,0,1,0,0,0,0, 255,0,0,0,0,255,0,0]))
+                    }
                     let incrementalRequest = try await self.read(connection, 10)
                     XCTAssertEqual(incrementalRequest, Data([3,1,0,0,0,0,0,2,0,1]))
+                    if compressed {
+                        // Continue the same stream in a later update.
+                        let pixels = try compressor.compress([0,255,0,0,0,255,0])
+                        try await self.send(connection, Data([0,0,0,1, 0,0,0,0,0,2,0,1,0,0,0,16] + Wire.u32(UInt32(pixels.count))) + pixels)
+                        let next = try await self.read(connection, 10)
+                        XCTAssertEqual(next, incrementalRequest)
+                        try await self.send(connection, Data([0,0,0,1, 0,0,0,0,0,2,0,2,255,255,255,33]))
+                        let resizedRequest = try await self.read(connection, 10)
+                        XCTAssertEqual(resizedRequest, Data([3,0,0,0,0,0,0,2,0,2]))
+                        let resized = try compressor.compress([0,255,0,0,0,255,0,255,0,0,0,255,0])
+                        try await self.send(connection, Data([0,0,0,1, 0,0,0,0,0,2,0,2,0,0,0,16] + Wire.u32(UInt32(resized.count))) + resized)
+                        let finalRequest = try await self.read(connection, 10)
+                        XCTAssertEqual(finalRequest, Data([3,1,0,0,0,0,0,2,0,2]))
+                    }
                 } catch { XCTFail("Mock server failed: \(error)") }
                 serverFinished.fulfill()
                 connection.cancel()
@@ -69,10 +100,19 @@ final class SessionTests: XCTestCase {
         await fulfillment(of: [listenerReady], timeout: 3)
         let port = try XCTUnwrap(listener.port?.rawValue)
         let client = RFBClient()
+        let frameIndex = OSAllocatedUnfairLock(initialState: 0)
         let task = Task {
             try? await client.run(host: "127.0.0.1", port: port, username: account ? "alex" : "", password: account ? "암호123" : "\0", onFrame: { frame in
-                XCTAssertEqual(frame.width, 2); XCTAssertEqual(frame.height, 1)
-                XCTAssertEqual(frame.rgba, Data([255,0,0,255,0,255,0,255]))
+                frameIndex.withLock { index in
+                    let row = Data([255,0,0,255,0,255,0,255])
+                    let expected = compressed ? [row, row, Data(repeating: 0, count: 16), row + row] : [row]
+                    XCTAssertLessThan(index, expected.count)
+                    guard index < expected.count else { return }
+                    XCTAssertEqual(frame.width, 2)
+                    XCTAssertEqual(frame.height, index < 2 ? 1 : 2)
+                    XCTAssertEqual(frame.rgba, expected[index])
+                    index += 1
+                }
                 receivedFrame.fulfill()
             }, onReady: { name in
                 XCTAssertEqual(name, "Test"); ready.fulfill()

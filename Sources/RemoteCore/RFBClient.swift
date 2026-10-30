@@ -87,12 +87,13 @@ public actor RFBClient {
         try allocate()
         // 32 bpp, 24-bit depth, little endian, true colour; R/G/B shifts 0/8/16.
         try await send(Data([0,0,0,0, 32,24,0,1, 0,255,0,255,0,255, 0,8,16, 0,0,0]))
-        // Raw + DesktopSize. Compression comes after input compatibility is established.
-        try await send(Data([2,0,0,2] + Wire.u32(0) + Wire.u32(0xffffff21)))
+        // Prefer lossless ZRLE; servers may still choose Raw. Keep resize notifications.
+        try await send(Data([2,0,0,3] + Wire.u32(16) + Wire.u32(0) + Wire.u32(0xffffff21)))
         handshakeDeadline.cancel()
         onProgress("첫 화면을 받는 중…")
         onReady(name)
         try await request(incremental: false)
+        var zrle: ZRLEDecoder?
         while !Task.isCancelled {
             let type = try await number(1)
             switch type {
@@ -106,10 +107,23 @@ public actor RFBClient {
                     let encoding = try await number(4)
                     if encoding == 0xffffff21 {
                         width = w; height = h; try allocate(); resized = true
-                    } else if encoding == 0 {
+                    } else if encoding == 0 || encoding == 16 {
                         guard w > 0, h > 0, x + w <= width, y + h <= height else { throw RFBError.invalid("화면 데이터의 범위가 잘못되었습니다.") }
-                        var rect = try await read(w * h * 4)
-                        for alpha in stride(from: 3, to: rect.count, by: 4) { rect[alpha] = 255 }
+                        var rect: Data
+                        if encoding == 16 {
+                            let length = try await number(4)
+                            guard length > 0, length <= ZRLEDecoder.maximumCompressedLength else {
+                                throw RFBError.invalid("ZRLE 압축 데이터가 허용 크기를 초과했습니다.")
+                            }
+                            let compressed = try await read(length)
+                            let decoder: ZRLEDecoder
+                            if let existing = zrle { decoder = existing }
+                            else { decoder = try ZRLEDecoder(); zrle = decoder }
+                            rect = try decoder.decode(compressed, width: w, height: h)
+                        } else {
+                            rect = try await read(w * h * 4)
+                            for alpha in stride(from: 3, to: rect.count, by: 4) { rect[alpha] = 255 }
+                        }
                         for row in 0..<h {
                             let start = ((y + row) * width + x) * 4
                             pixels.replaceSubrange(start..<(start + w * 4), with: rect[(row * w * 4)..<((row + 1) * w * 4)])
