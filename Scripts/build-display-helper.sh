@@ -19,6 +19,7 @@ cat > "$TASK_APP/Contents/Info.plist" <<'PLIST'
 <key>CFBundlePackageType</key><string>APPL</string>
 <key>CFBundleShortVersionString</key><string>0.1.0</string>
 <key>CFBundleVersion</key><string>2</string>
+<key>ITSAppUsesNonExemptEncryption</key><false/>
 <key>CFBundleIconFile</key><string>AppIcon</string>
 <key>LSUIElement</key><true/>
 <key>NSLocalNetworkUsageDescription</key><string>아이폰에서 맥 화면 해상도를 변경하고 접속 종료 시 복원하기 위해 연결합니다.</string>
