@@ -3,7 +3,7 @@ set -eu
 cd "${0:A:h:h}"
 export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
 TASK_BUILD=/tmp/macremote-helper-build
-TASK_APP="$PWD/Build/Mac Remote Display.app"
+TASK_APP="$PWD/Build/Specula Display.app"
 xcrun swift build --disable-sandbox -c release --product MacDisplayHelper --scratch-path "$TASK_BUILD"
 mkdir -p "$TASK_APP/Contents/MacOS" "$TASK_APP/Contents/Resources"
 cp "$TASK_BUILD/out/Products/Release/MacDisplayHelper" "$TASK_APP/Contents/MacOS/MacDisplayHelper"
@@ -12,9 +12,9 @@ cat > "$TASK_APP/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
-<key>CFBundleIdentifier</key><string>com.alex.MacRemote.Display</string>
-<key>CFBundleName</key><string>Mac Remote Display</string>
-<key>CFBundleDisplayName</key><string>Mac Remote Display</string>
+<key>CFBundleIdentifier</key><string>com.ias.specula.display</string>
+<key>CFBundleName</key><string>Specula Display</string>
+<key>CFBundleDisplayName</key><string>Specula Display</string>
 <key>CFBundleExecutable</key><string>MacDisplayHelper</string>
 <key>CFBundlePackageType</key><string>APPL</string>
 <key>CFBundleShortVersionString</key><string>0.1.0</string>

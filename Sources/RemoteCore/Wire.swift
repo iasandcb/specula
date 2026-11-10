@@ -6,6 +6,19 @@ public enum RFBError: LocalizedError {
     public var errorDescription: String? { if case .invalid(let message) = self { return message }; return nil }
 }
 
+/// RFB PointerEvent button mask. Bit 0 is the left button (RFC 6143 §7.5.5).
+public enum PointerButtons {
+    public static let none: UInt8 = 0
+    public static let left: UInt8 = 1 << 0
+    public static let middle: UInt8 = 1 << 1
+    public static let right: UInt8 = 1 << 2
+    public static let wheelUp: UInt8 = 1 << 3
+    public static let wheelDown: UInt8 = 1 << 4
+
+    /// Press, then release. A click must not leave the button down.
+    public static func click(_ button: UInt8) -> [UInt8] { [button, none] }
+}
+
 public enum Wire {
     public static func u16(_ value: Int) -> [UInt8] { [UInt8(truncatingIfNeeded: value >> 8), UInt8(truncatingIfNeeded: value)] }
     public static func u32(_ value: UInt32) -> [UInt8] { (0..<4).reversed().map { UInt8(truncatingIfNeeded: value >> ($0 * 8)) } }

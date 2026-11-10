@@ -34,9 +34,15 @@ final class RemoteCanvas: UIView {
         drag.maximumNumberOfTouches = 1
         let scroll = UIPanGestureRecognizer(target: self, action: #selector(scroll(_:)))
         scroll.minimumNumberOfTouches = 2; scroll.maximumNumberOfTouches = 2
-        addGestureRecognizer(tap); addGestureRecognizer(drag); addGestureRecognizer(scroll)
+        let rightClick = SecondaryClickRecognizer(target: self, action: #selector(rightClick(_:)))
+        rightClick.numberOfTouchesRequired = 1
+        rightClick.minimumPressDuration = 0.5
+        // A long press is only a right click. Tap and drag wait until it fails.
+        tap.require(toFail: rightClick)
+        drag.require(toFail: rightClick)
+        addGestureRecognizer(tap); addGestureRecognizer(drag); addGestureRecognizer(scroll); addGestureRecognizer(rightClick)
         isAccessibilityElement = true
-        accessibilityLabel = "맥 화면. 탭으로 클릭, 한 손가락으로 드래그, 두 손가락으로 스크롤"
+        accessibilityLabel = "맥 화면. 탭으로 클릭, 길게 눌러 우클릭, 한 손가락으로 드래그, 두 손가락으로 스크롤"
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
     private var imageRect: CGRect {
@@ -59,20 +65,28 @@ final class RemoteCanvas: UIView {
     }
     @objc private func tap(_ gesture: UITapGestureRecognizer) {
         guard let point = remote(gesture) else { return }
-        pointer?(point, 1); pointer?(point, 0)
+        click(point, button: PointerButtons.left)
+    }
+    @objc private func rightClick(_ gesture: UILongPressGestureRecognizer) {
+        guard gesture.state == .began, gesture.numberOfTouches == 1, let point = remote(gesture) else { return }
+        click(point, button: PointerButtons.right)
     }
     @objc private func drag(_ gesture: UIPanGestureRecognizer) {
         guard let point = remote(gesture) else { return }
-        pointer?(point, gesture.state == .began || gesture.state == .changed ? 1 : 0)
+        pointer?(point, gesture.state == .began || gesture.state == .changed ? PointerButtons.left : PointerButtons.none)
     }
     @objc private func scroll(_ gesture: UIPanGestureRecognizer) {
         if gesture.state == .began { scrollOrigin = 0 }
         guard let point = remote(gesture) else { return }
         let distance = gesture.translation(in: self).y - scrollOrigin
         if abs(distance) > 16 {
-            pointer?(point, distance > 0 ? 8 : 16); pointer?(point, 0)
+            pointer?(point, distance > 0 ? PointerButtons.wheelUp : PointerButtons.wheelDown)
+            pointer?(point, PointerButtons.none)
             scrollOrigin = gesture.translation(in: self).y
         }
+    }
+    private func click(_ point: CGPoint, button: UInt8) {
+        for mask in PointerButtons.click(button) { pointer?(point, mask) }
     }
     override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
         // UIPress sets are unordered: transmit modifiers before the key they modify.
@@ -103,5 +117,22 @@ final class RemoteCanvas: UIView {
     override func resignFirstResponder() -> Bool {
         held.values.forEach { key?($0, false) }; held.removeAll()
         return super.resignFirstResponder()
+    }
+}
+
+/// One-finger long press. A second finger on the screen fails it, so a two-finger scroll cannot also right-click.
+final class SecondaryClickRecognizer: UILongPressGestureRecognizer {
+    override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent) {
+        super.touchesBegan(touches, with: event)
+        failIfAnotherFinger(event)
+    }
+    override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent) {
+        super.touchesMoved(touches, with: event)
+        failIfAnotherFinger(event)
+    }
+    private func failIfAnotherFinger(_ event: UIEvent) {
+        guard state == .possible, let view else { return }
+        let active = event.touches(for: view)?.filter { $0.phase != .ended && $0.phase != .cancelled }.count ?? 0
+        if active > numberOfTouchesRequired { state = .failed }
     }
 }

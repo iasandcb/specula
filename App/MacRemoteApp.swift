@@ -162,7 +162,7 @@ struct RemoteView: View {
                 if session.active && !session.ready { ProgressView() }
             }
             .padding(.bottom, 8)
-            .navigationTitle("Mac Remote")
+            .navigationTitle("Specula")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 if session.active { Button("연결 종료") { session.disconnect() } }

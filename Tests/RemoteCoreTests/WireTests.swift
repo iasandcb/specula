@@ -18,7 +18,19 @@ final class WireTests: XCTestCase {
         XCTAssertEqual(Array(Wire.key(0xffeb, down: false)), [4,0,0,0,0,0,255,235])
     }
     func testPointerCoordinatesDoNotLoseHighBytes() {
-        XCTAssertEqual(Array(Wire.pointer(x: 1920, y: 1080, buttons: 1)), [5,1,7,128,4,56])
+        XCTAssertEqual(Array(Wire.pointer(x: 1920, y: 1080, buttons: PointerButtons.left)), [5,1,7,128,4,56])
+    }
+    func testPointerButtonMaskMatchesRFBBits() {
+        XCTAssertEqual(PointerButtons.left, 1)
+        XCTAssertEqual(PointerButtons.middle, 2)
+        XCTAssertEqual(PointerButtons.right, 4)
+        XCTAssertEqual(PointerButtons.wheelUp, 8)
+        XCTAssertEqual(PointerButtons.wheelDown, 16)
+        XCTAssertEqual(PointerButtons.left | PointerButtons.middle | PointerButtons.right | PointerButtons.wheelUp | PointerButtons.wheelDown, 31)
+        XCTAssertEqual(PointerButtons.click(PointerButtons.left), [PointerButtons.left, PointerButtons.none])
+        XCTAssertEqual(PointerButtons.click(PointerButtons.right), [4, 0])
+        XCTAssertEqual(Array(Wire.pointer(x: 10, y: 20, buttons: PointerButtons.right)), [5,4,0,10,0,20])
+        XCTAssertEqual(Array(Wire.pointer(x: 10, y: 20, buttons: PointerButtons.none)), [5,0,0,10,0,20])
     }
     func testAltSidesProvideBothMacCommandAndOption() {
         XCTAssertEqual(PhysicalKey.symbol(hid: 226), 0xffeb) // Left Alt → Command
