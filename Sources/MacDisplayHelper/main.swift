@@ -25,9 +25,9 @@ final class DisplayHelper: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
         item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-        item.button?.image = NSImage(systemSymbolName: "display", accessibilityDescription: "Mac Remote 화면 설정")
+        item.button?.image = NSImage(systemSymbolName: "display", accessibilityDescription: "Specula 화면 설정")
         let menu = NSMenu()
-        menu.addItem(withTitle: "Mac Remote 화면 설정", action: nil, keyEquivalent: "")
+        menu.addItem(withTitle: "Specula 화면 설정", action: nil, keyEquivalent: "")
         codeItem = menu.addItem(withTitle: "", action: #selector(showPairing), keyEquivalent: "")
         codeItem.target = self
         let renew = menu.addItem(withTitle: "새 연결 코드 표시", action: #selector(newCode), keyEquivalent: ""); renew.target = self
@@ -84,16 +84,16 @@ final class DisplayHelper: NSObject, NSApplicationDelegate {
         codeItem.title = "연결 코드: \(code) (5분)"; showPairing()
     }
     @objc private func showPairing() {
-        let text = "아이폰의 Mac Remote → 해상도 설정에서\n아래 연결 코드를 입력하세요.\n\n\(code)\n\n맥 주소: \(address)\n코드는 5분 동안 유효합니다.\n접속 종료 또는 연결 유실 시 원래 해상도로 복원합니다."
+        let text = "아이폰의 Specula → 해상도 설정에서\n아래 연결 코드를 입력하세요.\n\n\(code)\n\n맥 주소: \(address)\n코드는 5분 동안 유효합니다.\n접속 종료 또는 연결 유실 시 원래 해상도로 복원합니다."
         let label = NSTextField(wrappingLabelWithString: text)
         label.font = .systemFont(ofSize: 17); label.alignment = .center
         label.frame = NSRect(x: 24, y: 24, width: 372, height: 230)
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 420, height: 280), styleMask: [.titled, .closable], backing: .buffered, defer: false)
-        window.title = "Mac Remote · 해상도 연결"; window.contentView?.addSubview(label)
+        window.title = "Specula · 해상도 연결"; window.contentView?.addSubview(label)
         window.isReleasedWhenClosed = false; window.center(); self.window?.close(); self.window = window
         window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
     }
-    private func showMessage(_ text: String) { NSLog("Mac Remote Display: %@", text); let alert = NSAlert(); alert.messageText = text; alert.runModal() }
+    private func showMessage(_ text: String) { NSLog("Specula Display: %@", text); let alert = NSAlert(); alert.messageText = text; alert.runModal() }
     private func modes() -> [CGDisplayMode] {
         (CGDisplayCopyAllDisplayModes(CGMainDisplayID(), [kCGDisplayShowDuplicateLowResolutionModes: true] as CFDictionary) as? [CGDisplayMode] ?? [])
             .filter { $0.isUsableForDesktopGUI() && $0.width >= 800 && $0.pixelWidth * $0.pixelHeight <= 16_777_216 }

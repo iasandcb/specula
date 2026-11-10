@@ -96,7 +96,7 @@ final class DisplayController: ObservableObject {
         return data
     }
     private func keyQuery(host: String) -> [String: Any] {
-        [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: "com.alex.MacRemote.Display", kSecAttrAccount as String: host]
+        [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: "com.ias.specula.display", kSecAttrAccount as String: host]
     }
     private func readToken(host: String) -> String? {
         var query = keyQuery(host: host); query[kSecReturnData as String] = true
@@ -122,7 +122,7 @@ struct DisplaySettingsView: View {
             Form {
                 if !controller.paired {
                     Section("맥 보조 앱 연결") {
-                        Text("맥에서 ‘Mac Remote Display’를 실행한 뒤 표시된 6자리 코드를 입력하세요.")
+                        Text("맥에서 ‘Specula Display’를 실행한 뒤 표시된 6자리 코드를 입력하세요.")
                         TextField("6자리 연결 코드", text: $code).keyboardType(.numberPad).textContentType(.oneTimeCode)
                         Button("연결") { Task { await controller.pair(code: code); code = "" } }
                             .disabled(code.count != 6 || controller.busy)
