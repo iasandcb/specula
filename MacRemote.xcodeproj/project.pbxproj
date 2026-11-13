@@ -16,6 +16,7 @@
 		000000000000000000000132 /* App/Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000131 /* App/Assets.xcassets */; };
 		000000000000000000000142 /* App/DisplaySettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000140 /* App/DisplaySettings.swift */; };
 		000000000000000000000143 /* Sources/DisplaySupport/DisplayMessages.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000141 /* Sources/DisplaySupport/DisplayMessages.swift */; };
+		000000000000000000000147 /* Sources/RemoteCore/PointerInput.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000146 /* Sources/RemoteCore/PointerInput.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -28,6 +29,7 @@
 		000000000000000000000131 /* App/Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = App/Assets.xcassets; sourceTree = SOURCE_ROOT; };
 		000000000000000000000140 /* App/DisplaySettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = App/DisplaySettings.swift; sourceTree = SOURCE_ROOT; };
 		000000000000000000000141 /* Sources/DisplaySupport/DisplayMessages.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/DisplaySupport/DisplayMessages.swift; sourceTree = SOURCE_ROOT; };
+		000000000000000000000146 /* Sources/RemoteCore/PointerInput.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/RemoteCore/PointerInput.swift; sourceTree = SOURCE_ROOT; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -52,6 +54,7 @@
 				000000000000000000000064 /* App/MacRemoteApp.swift */,
 				000000000000000000000065 /* App/ScreenSurface.swift */,
 				000000000000000000000066 /* Sources/RemoteCore/Wire.swift */,
+				000000000000000000000146 /* Sources/RemoteCore/PointerInput.swift */,
 				000000000000000000000067 /* Sources/RemoteCore/RFBClient.swift */,
 				000000000000000000000003 /* Products */,
 			);
@@ -139,6 +142,7 @@
 				0000000000000000000000C8 /* App/MacRemoteApp.swift in Sources */,
 				0000000000000000000000C9 /* App/ScreenSurface.swift in Sources */,
 				0000000000000000000000CA /* Sources/RemoteCore/Wire.swift in Sources */,
+				000000000000000000000147 /* Sources/RemoteCore/PointerInput.swift in Sources */,
 				0000000000000000000000CB /* Sources/RemoteCore/RFBClient.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;

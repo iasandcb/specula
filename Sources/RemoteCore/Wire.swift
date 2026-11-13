@@ -7,6 +7,7 @@ public enum RFBError: LocalizedError {
 }
 
 /// RFB PointerEvent button mask. Bit 0 is the left button (RFC 6143 §7.5.5).
+/// Bits 5 and 6 are the de facto horizontal wheel (buttons 6 and 7).
 public enum PointerButtons {
     public static let none: UInt8 = 0
     public static let left: UInt8 = 1 << 0
@@ -14,6 +15,8 @@ public enum PointerButtons {
     public static let right: UInt8 = 1 << 2
     public static let wheelUp: UInt8 = 1 << 3
     public static let wheelDown: UInt8 = 1 << 4
+    public static let wheelLeft: UInt8 = 1 << 5
+    public static let wheelRight: UInt8 = 1 << 6
 
     /// Press, then release. A click must not leave the button down.
     public static func click(_ button: UInt8) -> [UInt8] { [button, none] }

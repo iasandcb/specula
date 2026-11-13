@@ -42,6 +42,8 @@
 	<string>같은 네트워크에 있는 맥에 연결하여 화면을 표시하고 키보드와 마우스를 제어합니다.</string>
 	<key>UILaunchScreen</key>
 	<dict/>
+	<key>UIApplicationSupportsIndirectInputEvents</key>
+	<true/>
 	<key>UIRequiresFullScreen</key>
 	<true/>
 	<key>UISupportedInterfaceOrientations</key>
