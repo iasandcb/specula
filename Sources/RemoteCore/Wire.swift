@@ -50,6 +50,27 @@ public enum Wire {
     }
 }
 
+/// Whether the remote screen should take hardware and software keys.
+/// A presented sheet or alert, or a focused text field, keeps typing in the app.
+public struct KeyboardCapture: Equatable {
+    public enum Action: Equatable { case become, resign, stay }
+    public var enabled: Bool
+    public var interfacePresented: Bool
+    public var textInputFocused: Bool
+    public var isFirstResponder: Bool
+    public init(enabled: Bool, interfacePresented: Bool, textInputFocused: Bool, isFirstResponder: Bool) {
+        self.enabled = enabled
+        self.interfacePresented = interfacePresented
+        self.textInputFocused = textInputFocused
+        self.isFirstResponder = isFirstResponder
+    }
+    public var forwardsToRemote: Bool { enabled && !interfacePresented && !textInputFocused }
+    public var action: Action {
+        if forwardsToRemote { return isFirstResponder ? .stay : .become }
+        return isFirstResponder ? .resign : .stay
+    }
+}
+
 /// US ANSI HID positions mapped to X11 keysyms for Apple's Screen Sharing server.
 /// Left Alt sends Command (Super_L); right Alt sends Option (Meta_L).
 /// Apple interprets Alt keysyms as Command too; Option must use Meta.

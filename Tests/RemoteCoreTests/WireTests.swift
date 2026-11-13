@@ -47,6 +47,27 @@ final class WireTests: XCTestCase {
         XCTAssertEqual(PhysicalKey.symbol(hid: 48), 93)
         XCTAssertEqual(PhysicalKey.symbol(hid: 80, option: true), 0xff51)
     }
+    func testKeyboardCaptureYieldsToSheetsAlertsAndTextFieldsThenResumes() {
+        let connected = KeyboardCapture(enabled: true, interfacePresented: false, textInputFocused: false, isFirstResponder: true)
+        XCTAssertTrue(connected.forwardsToRemote)
+        XCTAssertEqual(connected.action, .stay)
+        XCTAssertEqual(KeyboardCapture(enabled: true, interfacePresented: false, textInputFocused: false, isFirstResponder: false).action, .become)
+
+        let sheet = KeyboardCapture(enabled: true, interfacePresented: true, textInputFocused: false, isFirstResponder: true)
+        XCTAssertFalse(sheet.forwardsToRemote)
+        XCTAssertEqual(sheet.action, .resign)
+        let typing = KeyboardCapture(enabled: true, interfacePresented: true, textInputFocused: true, isFirstResponder: false)
+        XCTAssertFalse(typing.forwardsToRemote)
+        XCTAssertEqual(typing.action, .stay)
+        let field = KeyboardCapture(enabled: true, interfacePresented: false, textInputFocused: true, isFirstResponder: false)
+        XCTAssertFalse(field.forwardsToRemote)
+        XCTAssertEqual(field.action, .stay)
+
+        let resumed = KeyboardCapture(enabled: true, interfacePresented: false, textInputFocused: false, isFirstResponder: false)
+        XCTAssertTrue(resumed.forwardsToRemote)
+        XCTAssertEqual(resumed.action, .become)
+        XCTAssertEqual(KeyboardCapture(enabled: false, interfacePresented: false, textInputFocused: false, isFirstResponder: true).action, .resign)
+    }
     func testPhysicalPositionsRemainLatinForMacIME() {
         // Korean ㄱ occupies the US R position; never transmit composed Korean here.
         XCTAssertEqual(PhysicalKey.symbol(hid: 21), 0x72)

@@ -11,7 +11,8 @@ struct ScreenSurface: UIViewRepresentable {
     func updateUIView(_ view: RemoteCanvas, context: Context) {
         view.remoteOptionHeld = optionHeld; view.fill = fill; view.image = image; view.key = key; view.pointer = pointer
         view.isUserInteractionEnabled = enabled
-        if enabled && !view.isFirstResponder { view.becomeFirstResponder() }
+        // Frame updates must not steal first responder from a sheet, alert, or text field.
+        view.setKeyCaptureEnabled(enabled)
     }
 }
 
@@ -23,7 +24,72 @@ final class RemoteCanvas: UIView {
     var pointer: ((CGPoint, UInt8) -> Void)?
     private var held: [Int: UInt32] = [:]
     private var scrollOrigin: CGFloat = 0
-    override var canBecomeFirstResponder: Bool { true }
+    private var keyCaptureEnabled = false
+    private var allowKeyCapture = false
+    private var keyCaptureArmed = false
+    private var updatingKeyCapture = false
+    // Cached so UIKit can ask during a responder transition without walking the chain.
+    override var canBecomeFirstResponder: Bool { allowKeyCapture }
+    func setKeyCaptureEnabled(_ enabled: Bool) {
+        keyCaptureEnabled = enabled
+        refreshKeyCapture()
+        armKeyCaptureFollowUp()
+    }
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        refreshKeyCapture()
+        if window != nil { armKeyCaptureFollowUp() }
+    }
+    @objc private func textInputChanged() {
+        refreshKeyCapture()
+        armKeyCaptureFollowUp()
+    }
+    private func capture() -> KeyboardCapture {
+        let presented = interfacePresented
+        let textFocused = !presented && !isFirstResponder && Self.hasFocusedTextInput(window)
+        return KeyboardCapture(enabled: keyCaptureEnabled && window != nil, interfacePresented: presented, textInputFocused: textFocused, isFirstResponder: isFirstResponder)
+    }
+    private var interfacePresented: Bool {
+        if let root = window?.rootViewController, Self.presentsInterface(root) { return true }
+        var responder: UIResponder? = self
+        while let current = responder {
+            if let controller = current as? UIViewController, controller.presentedViewController != nil { return true }
+            responder = current.next
+        }
+        return false
+    }
+    private static func presentsInterface(_ controller: UIViewController) -> Bool {
+        controller.presentedViewController != nil || controller.children.contains(where: presentsInterface)
+    }
+    private static func hasFocusedTextInput(_ view: UIView?) -> Bool {
+        guard let view else { return false }
+        if view.isFirstResponder, view is UIKeyInput { return true }
+        return view.subviews.contains(where: hasFocusedTextInput)
+    }
+    private func refreshKeyCapture() {
+        guard !updatingKeyCapture else { return }
+        updatingKeyCapture = true
+        defer { updatingKeyCapture = false }
+        let state = capture()
+        allowKeyCapture = state.forwardsToRemote
+        switch state.action {
+        case .become: becomeFirstResponder()
+        case .resign: resignFirstResponder()
+        case .stay: break
+        }
+    }
+    private func armKeyCaptureFollowUp() {
+        guard !keyCaptureArmed else { return }
+        keyCaptureArmed = true
+        DispatchQueue.main.async { [weak self] in self?.refreshKeyCapture() }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
+            guard let self else { return }
+            self.keyCaptureArmed = false
+            self.refreshKeyCapture()
+            let state = self.capture()
+            if self.keyCaptureEnabled, state.interfacePresented || state.textInputFocused { self.armKeyCaptureFollowUp() }
+        }
+    }
     override init(frame: CGRect) {
         super.init(frame: frame)
         backgroundColor = .black
@@ -43,8 +109,13 @@ final class RemoteCanvas: UIView {
         addGestureRecognizer(tap); addGestureRecognizer(drag); addGestureRecognizer(scroll); addGestureRecognizer(rightClick)
         isAccessibilityElement = true
         accessibilityLabel = "맥 화면. 탭으로 클릭, 길게 눌러 우클릭, 한 손가락으로 드래그, 두 손가락으로 스크롤"
+        let center = NotificationCenter.default
+        for name in [UITextField.textDidBeginEditingNotification, UITextField.textDidEndEditingNotification, UITextView.textDidBeginEditingNotification, UITextView.textDidEndEditingNotification] {
+            center.addObserver(self, selector: #selector(textInputChanged), name: name, object: nil)
+        }
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+    deinit { NotificationCenter.default.removeObserver(self) }
     private var imageRect: CGRect {
         guard let image, bounds.width > 0, bounds.height > 0 else { return .zero }
         let horizontal = bounds.width / image.size.width
@@ -89,6 +160,7 @@ final class RemoteCanvas: UIView {
         for mask in PointerButtons.click(button) { pointer?(point, mask) }
     }
     override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
+        guard capture().forwardsToRemote else { super.pressesBegan(presses, with: event); return }
         // UIPress sets are unordered: transmit modifiers before the key they modify.
         let ordered = presses.sorted {
             let left = $0.key.map { (224...231).contains($0.keyCode.rawValue) } ?? false
@@ -103,8 +175,14 @@ final class RemoteCanvas: UIView {
             if let symbol { held[hid] = symbol; key?(symbol, true) }
         }
     }
-    override func pressesEnded(_ presses: Set<UIPress>, with event: UIPressesEvent?) { release(presses) }
-    override func pressesCancelled(_ presses: Set<UIPress>, with event: UIPressesEvent?) { release(presses) }
+    override func pressesEnded(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
+        guard capture().forwardsToRemote || !held.isEmpty else { super.pressesEnded(presses, with: event); return }
+        release(presses)
+    }
+    override func pressesCancelled(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
+        guard capture().forwardsToRemote || !held.isEmpty else { super.pressesCancelled(presses, with: event); return }
+        release(presses)
+    }
     private func release(_ presses: Set<UIPress>) {
         for press in presses.sorted(by: {
             ($0.key?.keyCode.rawValue ?? 0) < ($1.key?.keyCode.rawValue ?? 0)
