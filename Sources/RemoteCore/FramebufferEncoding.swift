@@ -9,14 +9,31 @@ public enum RFBEncodings {
     public static let lastRect = 0xFFFF_FF20
     public static let desktopSize = 0xFFFF_FF21
 
-    /// ZRLE first, then CopyRect for scrolls, then Raw as the universal fallback.
-    public static let preferred = [zrle, copyRect, raw, cursor, desktopSize, lastRect]
+    /// macOS Screen Sharing drops the session when ZRLE or the Cursor pseudo-encoding is mishandled.
+    /// Those stay off unless explicitly enabled. CopyRect, Raw, DesktopSize, and LastRect are the safe set.
+    public static func advertised(enableZRLE: Bool = false, enableCursor: Bool = false) -> [Int] {
+        var list: [Int] = []
+        if enableZRLE { list.append(zrle) }
+        list.append(copyRect)
+        list.append(raw)
+        if enableCursor { list.append(cursor) }
+        list.append(desktopSize)
+        list.append(lastRect)
+        return list
+    }
 
-    public static func setEncodingsMessage() -> Data {
+    public static func setEncodingsMessage(enableZRLE: Bool = false, enableCursor: Bool = false) -> Data {
+        let values = advertised(enableZRLE: enableZRLE, enableCursor: enableCursor)
         var bytes: [UInt8] = [2, 0]
-        bytes.append(contentsOf: Wire.u16(preferred.count))
-        for value in preferred { bytes.append(contentsOf: Wire.u32(UInt32(value))) }
+        bytes.append(contentsOf: Wire.u16(values.count))
+        for value in values { bytes.append(contentsOf: Wire.u32(UInt32(value))) }
         return Data(bytes)
+    }
+}
+
+public enum RectangleFailure {
+    public static func message(encoding: Int, x: Int, y: Int, width: Int, height: Int, underlying: String) -> String {
+        "화면 데이터 오류 · 인코딩 \(encoding) · \(x),\(y) \(width)×\(height): \(underlying)"
     }
 }
 

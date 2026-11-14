@@ -109,6 +109,14 @@ final class SessionResumeTests: XCTestCase {
         XCTAssertFalse(session.acceptsSessionEvents)
     }
 
+    func testConnectFocusPicksPasswordOnlyWhenTheOtherFieldsAreFilled() {
+        XCTAssertEqual(ConnectFocus.field(host: "mac.local", port: "5900", username: "alex", password: ""), .password)
+        XCTAssertEqual(ConnectFocus.field(host: "", port: "5900", username: "alex", password: ""), .host)
+        XCTAssertEqual(ConnectFocus.field(host: "mac.local", port: "  ", username: "alex", password: ""), .port)
+        XCTAssertEqual(ConnectFocus.field(host: "mac.local", port: "5900", username: "", password: ""), .username)
+        XCTAssertEqual(ConnectFocus.field(host: " mac.local ", port: "5900", username: "alex", password: "secret"), .password)
+    }
+
     private func liveSession() -> SessionResume {
         var session = SessionResume()
         session.beginManualConnect()

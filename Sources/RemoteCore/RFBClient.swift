@@ -1,5 +1,16 @@
 import Foundation
 import Network
+#if canImport(os)
+import os
+#endif
+
+private func logRFB(_ message: String) {
+    #if canImport(os)
+    Logger(subsystem: "com.ias.specula", category: "RFB").error("\(message, privacy: .public)")
+    #else
+    print("RFB: \(message)")
+    #endif
+}
 
 public struct Frame: Sendable {
     public let width: Int
@@ -153,32 +164,41 @@ public actor RFBClient {
             let w = try await number(2), h = try await number(2)
             let encoding = try await number(4)
             if encoding == RFBEncodings.lastRect { break }
-            switch encoding {
-            case RFBEncodings.desktopSize:
-                guard w > 0, h > 0 else { throw RFBError.invalid("화면 크기가 잘못되었습니다.") }
-                pending.append(.desktop(w, h))
-            case RFBEncodings.cursor:
-                if w == 0 || h == 0 {
-                    pending.append(.cursor(RemoteCursor(width: 0, height: 0, hotspotX: x, hotspotY: y, rgba: Data())))
-                } else {
-                    guard let length = CursorPseudo.payloadLength(width: w, height: h) else { throw RFBError.invalid("커서 크기가 지원 범위를 넘습니다.") }
-                    let payload = try await read(length)
-                    let pixelBytes = w * h * 4
-                    let cursor = try CursorPseudo.decode(width: w, height: h, hotspotX: x, hotspotY: y, pixels: payload.prefix(pixelBytes), mask: payload.suffix(length - pixelBytes))
-                    pending.append(.cursor(cursor))
+            do {
+                switch encoding {
+                case RFBEncodings.desktopSize:
+                    guard w > 0, h > 0 else { throw RFBError.invalid("화면 크기가 잘못되었습니다.") }
+                    pending.append(.desktop(w, h))
+                case RFBEncodings.cursor:
+                    if w == 0 || h == 0 {
+                        pending.append(.cursor(RemoteCursor(width: 0, height: 0, hotspotX: x, hotspotY: y, rgba: Data())))
+                    } else {
+                        guard let length = CursorPseudo.payloadLength(width: w, height: h) else { throw RFBError.invalid("커서 크기가 지원 범위를 넘습니다.") }
+                        let payload = try await read(length)
+                        let pixelBytes = w * h * 4
+                        let cursor = try CursorPseudo.decode(width: w, height: h, hotspotX: x, hotspotY: y, pixels: payload.prefix(pixelBytes), mask: payload.suffix(length - pixelBytes))
+                        pending.append(.cursor(cursor))
+                    }
+                case RFBEncodings.raw:
+                    guard w > 0, h > 0, w <= 8192, h <= 8192 else { throw RFBError.invalid("화면 데이터의 범위가 잘못되었습니다.") }
+                    pending.append(.raw(x: x, y: y, w: w, h: h, data: try await read(w * h * 4)))
+                case RFBEncodings.copyRect:
+                    let fromX = try await number(2), fromY = try await number(2)
+                    pending.append(.copy(x: x, y: y, w: w, h: h, fromX: fromX, fromY: fromY))
+                case RFBEncodings.zrle:
+                    let length = try await number(4)
+                    guard (1...8_000_000).contains(length) else { throw RFBError.invalid("화면 압축 크기가 잘못되었습니다.") }
+                    pending.append(.zrle(x: x, y: y, w: w, h: h, data: try await read(length)))
+                default:
+                    throw RFBError.invalid("지원하지 않는 화면 압축 방식입니다: \(encoding)")
                 }
-            case RFBEncodings.raw:
-                guard w > 0, h > 0, w <= 8192, h <= 8192 else { throw RFBError.invalid("화면 데이터의 범위가 잘못되었습니다.") }
-                pending.append(.raw(x: x, y: y, w: w, h: h, data: try await read(w * h * 4)))
-            case RFBEncodings.copyRect:
-                let fromX = try await number(2), fromY = try await number(2)
-                pending.append(.copy(x: x, y: y, w: w, h: h, fromX: fromX, fromY: fromY))
-            case RFBEncodings.zrle:
-                let length = try await number(4)
-                guard (1...8_000_000).contains(length) else { throw RFBError.invalid("화면 압축 크기가 잘못되었습니다.") }
-                pending.append(.zrle(x: x, y: y, w: w, h: h, data: try await read(length)))
-            default:
-                throw RFBError.invalid("지원하지 않는 화면 압축 방식입니다: \(encoding)")
+            } catch let error as RFBError where !error.isProtocolFailure {
+                throw error
+            } catch {
+                let detail = (error as? LocalizedError)?.errorDescription ?? String(describing: error)
+                let message = RectangleFailure.message(encoding: encoding, x: x, y: y, width: w, height: h, underlying: detail)
+                logRFB(message)
+                throw RFBError.invalid(message)
             }
         }
         return pending
@@ -195,24 +215,37 @@ public actor RFBClient {
                 try allocate()
                 pixelsChanged = true
             case .raw(let x, let y, let w, let h, var data):
-                guard x + w <= width, y + h <= height else { throw RFBError.invalid("화면 데이터의 범위가 잘못되었습니다.") }
-                for alpha in stride(from: 3, to: data.count, by: 4) { data[alpha] = 255 }
-                try blit(data, x: x, y: y, w: w, h: h)
+                do {
+                    guard x + w <= width, y + h <= height else { throw RFBError.invalid("화면 데이터의 범위가 잘못되었습니다.") }
+                    for alpha in stride(from: 3, to: data.count, by: 4) { data[alpha] = 255 }
+                    try blit(data, x: x, y: y, w: w, h: h)
+                } catch { throw contextual(RFBEncodings.raw, x, y, w, h, error) }
                 pixelsChanged = true
             case .copy(let x, let y, let w, let h, let fromX, let fromY):
-                try FramebufferCopy.copy(pixels: &pixels, width: width, height: height, x: x, y: y, w: w, h: h, fromX: fromX, fromY: fromY)
+                do { try FramebufferCopy.copy(pixels: &pixels, width: width, height: height, x: x, y: y, w: w, h: h, fromX: fromX, fromY: fromY) }
+                catch { throw contextual(RFBEncodings.copyRect, x, y, w, h, error) }
                 pixelsChanged = true
             case .zrle(let x, let y, let w, let h, let data):
-                guard x + w <= width, y + h <= height else { throw RFBError.invalid("화면 데이터의 범위가 잘못되었습니다.") }
-                let plain = try inflate.inflate(data)
-                let rgba = try zrle.decode(width: w, height: h, uncompressed: plain)
-                try blit(rgba, x: x, y: y, w: w, h: h)
+                do {
+                    guard x + w <= width, y + h <= height else { throw RFBError.invalid("화면 데이터의 범위가 잘못되었습니다.") }
+                    let plain = try inflate.inflate(data)
+                    let rgba = try zrle.decode(width: w, height: h, uncompressed: plain)
+                    try blit(rgba, x: x, y: y, w: w, h: h)
+                } catch { throw contextual(RFBEncodings.zrle, x, y, w, h, error) }
                 pixelsChanged = true
             case .cursor(let value):
                 cursor = value
             }
         }
         return (pixelsChanged, cursor)
+    }
+
+    private func contextual(_ encoding: Int, _ x: Int, _ y: Int, _ w: Int, _ h: Int, _ error: Error) -> Error {
+        if let error = error as? RFBError, !error.isProtocolFailure { return error }
+        let detail = (error as? LocalizedError)?.errorDescription ?? String(describing: error)
+        let message = RectangleFailure.message(encoding: encoding, x: x, y: y, width: w, height: h, underlying: detail)
+        logRFB(message)
+        return RFBError.invalid(message)
     }
 
     private func blit(_ rgba: Data, x: Int, y: Int, w: Int, h: Int) throws {

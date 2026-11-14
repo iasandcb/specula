@@ -2,16 +2,18 @@ import XCTest
 @testable import RemoteCore
 
 final class EncodingTests: XCTestCase {
-    func testPreferredEncodingsPutCompressionAheadOfRaw() {
+    func testDefaultEncodingsStayCompatibleWithMacScreenSharing() {
+        let safe = RFBEncodings.advertised()
+        XCTAssertEqual(safe, [RFBEncodings.copyRect, RFBEncodings.raw, RFBEncodings.desktopSize, RFBEncodings.lastRect])
+        XCTAssertFalse(safe.contains(RFBEncodings.zrle))
+        XCTAssertFalse(safe.contains(RFBEncodings.cursor))
         let message = RFBEncodings.setEncodingsMessage()
-        XCTAssertEqual(Array(message.prefix(4)), [2, 0, 0, 6])
-        let values = stride(from: 4, to: message.count, by: 4).map { Wire.integer(message[$0..<$0 + 4]) }
-        XCTAssertEqual(values, [
-            RFBEncodings.zrle, RFBEncodings.copyRect, RFBEncodings.raw,
-            RFBEncodings.cursor, RFBEncodings.desktopSize, RFBEncodings.lastRect
-        ])
-        XCTAssertLessThan(values.firstIndex(of: RFBEncodings.zrle)!, values.firstIndex(of: RFBEncodings.raw)!)
-        XCTAssertLessThan(values.firstIndex(of: RFBEncodings.copyRect)!, values.firstIndex(of: RFBEncodings.raw)!)
+        XCTAssertEqual(Array(message.prefix(4)), [2, 0, 0, 4])
+        let enabled = RFBEncodings.advertised(enableZRLE: true, enableCursor: true)
+        XCTAssertEqual(enabled.first, RFBEncodings.zrle)
+        XCTAssertLessThan(enabled.firstIndex(of: RFBEncodings.copyRect)!, enabled.firstIndex(of: RFBEncodings.raw)!)
+        XCTAssertTrue(enabled.contains(RFBEncodings.cursor))
+        XCTAssertEqual(RectangleFailure.message(encoding: 16, x: 0, y: 64, width: 64, height: 64, underlying: "팔레트"), "화면 데이터 오류 · 인코딩 16 · 0,64 64×64: 팔레트")
     }
 
     func testCopyRectOverlappingScrollUsesTheOriginalPixels() throws {
@@ -32,7 +34,17 @@ final class EncodingTests: XCTestCase {
         let hidden = try CursorPseudo.decode(width: 0, height: 0, hotspotX: 0, hotspotY: 0, pixels: Data(), mask: Data())
         XCTAssertTrue(hidden.isHidden)
         XCTAssertEqual(CursorPseudo.payloadLength(width: 2, height: 1), 8 + 1)
+        XCTAssertEqual(CursorPseudo.payloadLength(width: 0, height: 16), 0)
         XCTAssertNil(CursorPseudo.payloadLength(width: 800, height: 800))
+        // 8×2 cursor: row stride is 1 byte. Mask 0xF0 then 0x0F keeps the left half of row 0 and the right half of row 1.
+        var wide = Data()
+        for index in 0..<16 { wide.append(contentsOf: [UInt8(index), 0, 0, 0]) }
+        let shaped = try CursorPseudo.decode(width: 8, height: 2, hotspotX: 0, hotspotY: 0, pixels: wide, mask: Data([0b1111_0000, 0b0000_1111]))
+        XCTAssertEqual(shaped.rgba.count, 16 * 4)
+        XCTAssertEqual(shaped.rgba[3], 255)
+        XCTAssertEqual(shaped.rgba[4 * 4 + 3], 0)
+        XCTAssertEqual(shaped.rgba[(8 + 4) * 4 + 3], 255)
+        XCTAssertEqual(shaped.rgba[(8 + 0) * 4 + 3], 0)
     }
 
     func testZRLETilesSolidRawPaletteAndRuns() throws {
@@ -86,6 +98,22 @@ final class EncodingTests: XCTestCase {
         XCTAssertThrowsError(try ZRLERect.decode(width: 1, height: 1, uncompressed: Data([127, 0]))) { error in
             XCTAssertEqual(error.localizedDescription, "재사용할 ZRLE 팔레트가 없습니다.")
         }
+    }
+
+    func testCompressedZRLEFixturesRoundTrip() throws {
+        let solid = Data([0x78, 0x9c, 0x62, 0xfc, 0xcf, 0xc0, 0x00, 0x00, 0x00, 0x00, 0xff, 0xff])
+        let inflated = try InflateStream().inflate(solid)
+        XCTAssertEqual(inflated, Data([1, 255, 0, 0]))
+        let tile = try ZRLERect.decode(width: 64, height: 64, uncompressed: inflated)
+        XCTAssertEqual(tile.count, 64 * 64 * 4)
+        XCTAssertEqual(Array(tile.prefix(4)), [255, 0, 0, 255])
+        XCTAssertEqual(Array(tile.suffix(4)), [255, 0, 0, 255])
+
+        let reuse = Data([0x78, 0x9c, 0x62, 0x62, 0x60, 0x60, 0xf8, 0xff, 0xff, 0x3f, 0x03, 0x14, 0xd4, 0x37, 0x00, 0x00, 0x00, 0x00, 0xff, 0xff])
+        let plain = try InflateStream().inflate(reuse)
+        let image = try ZRLERect.decode(width: 65, height: 1, uncompressed: plain)
+        XCTAssertEqual(Array(image.prefix(4)), [0, 0, 0, 255])
+        XCTAssertEqual(Array(image.suffix(4)), [255, 255, 255, 255])
     }
 
     func testInflateResumesASyncFlushedStream() throws {
