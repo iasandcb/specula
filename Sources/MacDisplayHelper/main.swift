@@ -11,6 +11,7 @@ final class DisplayHelper: NSObject, NSApplicationDelegate {
     private var listener: HTTPListener?
     private var item: NSStatusItem!
     private var window: NSWindow?
+    private var largeCode: LargeCodeWindow?
     private var codeItem: NSMenuItem!
     private var code = ""
     private var codeDeadline = Date.distantPast
@@ -33,6 +34,7 @@ final class DisplayHelper: NSObject, NSApplicationDelegate {
         menu.addItem(withTitle: "Specula 화면 설정", action: nil, keyEquivalent: "")
         codeItem = menu.addItem(withTitle: "", action: #selector(showPairing), keyEquivalent: "")
         codeItem.target = self
+        let large = menu.addItem(withTitle: "코드 크게 보기", action: #selector(showLargeCode), keyEquivalent: ""); large.target = self
         let renew = menu.addItem(withTitle: "새 연결 코드 표시", action: #selector(newCode), keyEquivalent: ""); renew.target = self
         let restore = menu.addItem(withTitle: "원래 해상도로 복원", action: #selector(restoreAction), keyEquivalent: ""); restore.target = self
         menu.addItem(.separator())
@@ -84,7 +86,25 @@ final class DisplayHelper: NSObject, NSApplicationDelegate {
     @objc private func newCode() {
         code = String(format: "%06d", Int.random(in: 0...999999))
         codeDeadline = Date().addingTimeInterval(300); failedPairs = 0
-        codeItem.title = "연결 코드: \(code) (5분)"; showPairing()
+        codeItem.title = "연결 코드: \(code) (5분)"
+        presentLargeCode()
+    }
+    @objc private func showLargeCode() {
+        if code.isEmpty || Date() >= codeDeadline { newCode(); return }
+        presentLargeCode()
+    }
+    private func presentLargeCode() {
+        let screen = NSScreen.main ?? NSScreen.screens.first
+        let height = Double(screen?.frame.height ?? 800)
+        let metrics = PairingCodePresentation.digitPointSize(screenHeight: height)
+        let panel = largeCode ?? LargeCodeWindow()
+        largeCode = panel
+        panel.onClose = { [weak self] in self?.largeCode = nil }
+        panel.present(code: code, deadline: codeDeadline, digitSize: metrics, on: screen)
+    }
+    private func closeLargeCode() {
+        largeCode?.close()
+        largeCode = nil
     }
     @objc private func showPairing() {
         let text = "아이폰의 Specula → 해상도 설정에서\n아래 연결 코드를 입력하세요.\n\n\(code)\n\n맥 주소: \(address)\n코드는 5분 동안 유효합니다.\n접속 종료 또는 연결 유실 시 원래 해상도로 복원합니다."
@@ -157,6 +177,7 @@ final class DisplayHelper: NSObject, NSApplicationDelegate {
                 guard Date() < codeDeadline, input.code == code else {
                     failedPairs += 1; reply(connection, status: 401, value: DisplayFailure("연결 코드가 틀렸거나 만료되었습니다.")); return
                 }
+                closeLargeCode()
                 codeDeadline = .distantPast; codeItem.title = "아이폰 연결됨"
                 reply(connection, value: PairDisplayResponse(token: token)); return
             }
@@ -365,6 +386,105 @@ private final class HTTPRequestReader: @unchecked Sendable {
         }
     }
 }
+/// Borderless, always-on-top pairing code. Click or Esc dismisses it.
+@MainActor
+final class LargeCodeWindow: NSWindow {
+    var onClose: (() -> Void)?
+    private let codeLabel = NSTextField(labelWithString: "")
+    private let timeLabel = NSTextField(labelWithString: "")
+    private var ticker: Timer?
+    private var deadline = Date.distantPast
+    private var closing = false
+
+    init() {
+        super.init(contentRect: NSRect(x: 0, y: 0, width: 900, height: 360), styleMask: [.borderless], backing: .buffered, defer: false)
+        isOpaque = true
+        backgroundColor = .black
+        level = .floating
+        collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
+        hidesOnDeactivate = false
+        isReleasedWhenClosed = false
+        let root = ClickClosingView(frame: contentRect(forFrameRect: frame))
+        root.onClick = { [weak self] in self?.close() }
+        contentView = root
+        codeLabel.textColor = .white
+        codeLabel.alignment = .center
+        codeLabel.backgroundColor = .black
+        codeLabel.isBezeled = false
+        codeLabel.isEditable = false
+        timeLabel.textColor = .white
+        timeLabel.alignment = .center
+        timeLabel.backgroundColor = .black
+        timeLabel.isBezeled = false
+        timeLabel.isEditable = false
+        root.addSubview(codeLabel)
+        root.addSubview(timeLabel)
+    }
+
+    override var canBecomeKey: Bool { true }
+    override var canBecomeMain: Bool { true }
+
+    func present(code: String, deadline: Date, digitSize: Double, on screen: NSScreen?) {
+        self.deadline = deadline
+        let size = max(48, digitSize)
+        codeLabel.stringValue = PairingCodePresentation.groupedDigits(code)
+        codeLabel.font = .monospacedSystemFont(ofSize: size, weight: .semibold)
+        timeLabel.font = .monospacedSystemFont(ofSize: max(18, size / 5), weight: .regular)
+        let width = size * 7.4
+        let height = size * 1.7
+        let bounds = screen?.frame ?? NSRect(x: 0, y: 0, width: width, height: height)
+        setFrame(NSRect(x: bounds.midX - width / 2, y: bounds.midY - height / 2, width: width, height: height), display: true)
+        codeLabel.frame = NSRect(x: 0, y: height * 0.28, width: width, height: height * 0.62)
+        timeLabel.frame = NSRect(x: 0, y: height * 0.08, width: width, height: height * 0.16)
+        refreshCountdown()
+        ticker?.invalidate()
+        let timer = Timer(timeInterval: 1, repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.refreshCountdown() }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        ticker = timer
+        makeKeyAndOrderFront(nil)
+        makeFirstResponder(contentView)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    override func keyDown(with event: NSEvent) {
+        if event.keyCode == 53 || event.charactersIgnoringModifiers == "\u{1b}" { close() }
+        else { super.keyDown(with: event) }
+    }
+
+    override func close() {
+        guard !closing else { return }
+        closing = true
+        ticker?.invalidate()
+        ticker = nil
+        super.close()
+        let notify = onClose
+        onClose = nil
+        closing = false
+        notify?()
+    }
+
+    private func refreshCountdown() {
+        guard let label = PairingCodePresentation.remainingLabel(until: deadline, now: Date()) else {
+            close()
+            return
+        }
+        timeLabel.stringValue = label
+    }
+}
+
+private final class ClickClosingView: NSView {
+    var onClick: (() -> Void)?
+    override func hitTest(_ point: NSPoint) -> NSView? { bounds.contains(point) ? self : nil }
+    override var acceptsFirstResponder: Bool { true }
+    override func mouseDown(with event: NSEvent) { onClick?() }
+    override func keyDown(with event: NSEvent) {
+        if event.keyCode == 53 || event.charactersIgnoringModifiers == "\u{1b}" { onClick?() }
+        else { super.keyDown(with: event) }
+    }
+}
+
 MainActor.assumeIsolated {
     if CommandLine.arguments.contains("--verify-display") {
         do { try DisplayHelper().verifyDisplayChange(); exit(0) }

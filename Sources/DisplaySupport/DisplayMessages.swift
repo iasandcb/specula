@@ -74,6 +74,30 @@ public struct DisplaySnapshot: Codable, Sendable {
     public let modes: [RemoteDisplayMode]
     public init(current: RemoteDisplayMode, modes: [RemoteDisplayMode]) { self.current = current; self.modes = modes }
 }
+/// How the six-digit pairing code is drawn in the large window.
+public enum PairingCodePresentation {
+    /// "123456" → "123 456". Anything that is not six digits is left unchanged.
+    public static func groupedDigits(_ code: String) -> String {
+        let digits = code.filter(\.isNumber)
+        guard digits.count == 6 else { return code }
+        let split = digits.index(digits.startIndex, offsetBy: 3)
+        return "\(digits[..<split]) \(digits[split...])"
+    }
+
+    /// About 200 points, or a quarter of the screen, whichever is larger, without covering the whole display.
+    public static func digitPointSize(screenHeight: Double) -> Double {
+        guard screenHeight.isFinite, screenHeight > 0 else { return 200 }
+        return min(max(200, screenHeight / 4), screenHeight * 0.45)
+    }
+
+    /// Countdown under the digits. Nil once the code is no longer valid.
+    public static func remainingLabel(until deadline: Date, now: Date) -> String? {
+        let seconds = Int(deadline.timeIntervalSince(now))
+        guard seconds > 0 else { return nil }
+        return String(format: "남은 시간 %d:%02d", seconds / 60, seconds % 60)
+    }
+}
+
 public struct PairDisplayRequest: Codable { public let code: String; public init(code: String) { self.code = code } }
 public struct PairDisplayResponse: Codable { public let token: String; public init(token: String) { self.token = token } }
 public struct ChangeDisplayRequest: Codable { public let modeID: UInt32; public init(modeID: UInt32) { self.modeID = modeID } }
