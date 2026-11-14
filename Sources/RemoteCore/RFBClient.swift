@@ -167,6 +167,7 @@ public actor RFBClient {
             do {
                 switch encoding {
                 case RFBEncodings.desktopSize:
+                    // A 90° panel rotation arrives as a portrait desktop size. The following request is non-incremental.
                     guard w > 0, h > 0 else { throw RFBError.invalid("화면 크기가 잘못되었습니다.") }
                     pending.append(.desktop(w, h))
                 case RFBEncodings.cursor:

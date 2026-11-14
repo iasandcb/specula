@@ -7,6 +7,7 @@ final class DisplayController: ObservableObject {
     @Published var error = ""
     @Published var busy = false
     @Published var paired = false
+    @Published var portrait = false
     private var preferredModeID: UInt32?
     private var host = ""
     private var token: String?
@@ -23,10 +24,15 @@ final class DisplayController: ObservableObject {
         self.host = host; token = readToken(host: host); paired = token != nil
         snapshot = nil; error = ""
     }
-    func beginSession() { active = true; startHeartbeat() }
+    func beginSession() {
+        active = true
+        startHeartbeat()
+        Task { await refreshRotation() }
+    }
     func endSession() {
         active = false; heartbeat?.cancel(); heartbeat = nil
         preferredModeID = nil
+        portrait = false
         guard token != nil else { return }
         let host = self.host, token = self.token
         Task { try? await request(path: "/restore", body: Data("{}".utf8), host: host, token: token) }
@@ -72,6 +78,27 @@ final class DisplayController: ObservableObject {
     func reapplyPreferredMode() async {
         guard let mode = DisplayReconnect.mode(reconnecting: true, selected: preferredModeID) else { return }
         await change(mode)
+    }
+    func togglePortrait() async {
+        guard paired else {
+            error = "세로 모드는 해상도 보조 앱에 연결한 뒤 사용할 수 있습니다."
+            return
+        }
+        await perform {
+            let current = try JSONDecoder().decode(DisplayRotation.self, from: await self.request(path: "/rotation"))
+            guard current.supported else { throw RFBError.invalid("이 디스플레이는 회전을 지원하지 않습니다.") }
+            let next = DisplayRotationAngle.portraitToggle(from: current.degrees)
+            let body = try JSONEncoder().encode(SetDisplayRotation(degrees: next))
+            let updated = try JSONDecoder().decode(DisplayRotation.self, from: await self.request(path: "/rotation", body: body))
+            guard updated.supported else { throw RFBError.invalid("이 디스플레이는 회전을 지원하지 않습니다.") }
+            self.portrait = updated.degrees == 90
+        }
+    }
+    private func refreshRotation() async {
+        guard paired else { return }
+        guard let data = try? await request(path: "/rotation"),
+              let value = try? JSONDecoder().decode(DisplayRotation.self, from: data) else { return }
+        portrait = value.degrees == 90
     }
     func restore() async {
         await perform {

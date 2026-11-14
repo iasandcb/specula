@@ -34,6 +34,41 @@ public enum DisplayModes {
     }
 }
 
+/// Rotation of the main display. `supported` is false when the panel rejects the probe.
+public struct DisplayRotation: Codable, Equatable, Sendable {
+    public let degrees: Int
+    public let supported: Bool
+    public init(degrees: Int, supported: Bool) {
+        self.degrees = degrees
+        self.supported = supported
+    }
+}
+
+public struct SetDisplayRotation: Codable, Equatable, Sendable {
+    public let degrees: Int
+    public init(degrees: Int) { self.degrees = degrees }
+}
+
+/// Quadrants the framebuffer probe accepts, and the fb-rotate option word for each.
+public enum DisplayRotationAngle {
+    /// `kIOFBSetTransform` (0x400) with the quadrant in bits 7–8: 0, 90, 180, 270 → 0x400, 0x480, 0x500, 0x580.
+    public static func probeOptions(degrees: Int) -> UInt32? {
+        guard let angle = normalized(degrees) else { return nil }
+        return 0x0000_0400 | (UInt32(angle / 90) << 7)
+    }
+
+    public static func normalized(_ degrees: Int) -> Int? {
+        let wrapped = ((degrees % 360) + 360) % 360
+        guard wrapped.isMultiple(of: 90) else { return nil }
+        return wrapped
+    }
+
+    /// The phone toggle: upright goes to 90°, any other quadrant returns to 0°.
+    public static func portraitToggle(from degrees: Int) -> Int {
+        normalized(degrees) == 0 ? 90 : 0
+    }
+}
+
 public struct DisplaySnapshot: Codable, Sendable {
     public let current: RemoteDisplayMode
     public let modes: [RemoteDisplayMode]

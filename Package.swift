@@ -23,7 +23,11 @@ var packageDependencies: [Package.Dependency] = [
 
 var targets: [Target] = [
     .target(name: "DisplaySupport"),
-    .executableTarget(name: "MacDisplayHelper", dependencies: ["DisplaySupport"]),
+    .executableTarget(
+        name: "MacDisplayHelper",
+        dependencies: ["DisplaySupport"],
+        linkerSettings: [.linkedFramework("IOKit", .when(platforms: [.macOS]))]
+    ),
     .target(
         name: "CInflate",
         path: "Sources/CInflate",
