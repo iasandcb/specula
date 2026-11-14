@@ -187,9 +187,31 @@ public enum SessionControls {
     public static let input = "입력기"
     public static let resolution = "해상도"
     public static let keyboard = "키보드"
+    /// Apple's minimum control size. The two-character orientation title needs this floor.
+    public static let minimumHit = 44
+    /// Body text, up from the previous 12pt caption, still narrow enough for a 320pt phone.
+    public static let labelPointSize = 17
+    public static let buttonSpacing = 8
+    public static let labelPadding = 8
+    public static let horizontalInset = 8
 
     public static func orientation(macIsPortrait: Bool) -> String {
         macIsPortrait ? "가로" : "세로"
+    }
+
+    /// Width of one toolbar control, including padding, and never under the 44pt hit target.
+    public static func controlWidth(_ title: String) -> Int {
+        let text = title.reduce(0) { sum, character in
+            sum + (character.isASCII ? (labelPointSize * 7) / 12 : labelPointSize)
+        }
+        return max(minimumHit, text + labelPadding * 2)
+    }
+
+    /// Four controls, the flexible middle gap, and the outer insets. One row, no alternate layout.
+    public static func minimumRowWidth(macIsPortrait: Bool) -> Int {
+        let titles = [keyboard, input, resolution, orientation(macIsPortrait: macIsPortrait)]
+        let controls = titles.reduce(0) { $0 + controlWidth($1) }
+        return controls + buttonSpacing * (titles.count + 1) + horizontalInset * 2
     }
 
     public static func titles(macIsPortrait: Bool) -> [String] {
@@ -210,7 +232,7 @@ public enum SessionControls {
     }
 
     public static func fits(macIsPortrait: Bool, width: Int) -> Bool {
-        rowWidth(titles: titles(macIsPortrait: macIsPortrait)) <= width
+        minimumRowWidth(macIsPortrait: macIsPortrait) <= width
     }
 
     /// The previous bar. The keyboard title grew to "키보드 숨기기" while the panel was open, which is the state at connect.

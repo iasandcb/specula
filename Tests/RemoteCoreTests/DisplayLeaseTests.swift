@@ -101,6 +101,15 @@ final class DisplayLeaseTests: XCTestCase {
         XCTAssertGreaterThan(DisplayHTTP.rotationTimeout, 5)
         XCTAssertLessThanOrEqual(DisplayHTTP.rotationTimeout, 6)
     }
+    func testToolbarButtonsKeepAFortyFourPointHitArea() {
+        XCTAssertGreaterThanOrEqual(SessionControls.minimumHit, 44)
+        XCTAssertGreaterThan(SessionControls.labelPointSize, 12)
+        XCTAssertGreaterThanOrEqual(SessionControls.controlWidth("가로"), SessionControls.minimumHit)
+        XCTAssertGreaterThanOrEqual(SessionControls.controlWidth("세로"), SessionControls.minimumHit)
+        XCTAssertGreaterThan(SessionControls.controlWidth("가로"), SessionControls.labelPointSize * 2)
+        XCTAssertTrue(SessionControls.fits(macIsPortrait: true, width: 320))
+        XCTAssertTrue(SessionControls.fits(macIsPortrait: false, width: 320))
+    }
     func testConnectedToolbarKeepsTheKeyboardButtonOnANarrowPhone() {
         for portrait in [false, true] {
             let titles = SessionControls.titles(macIsPortrait: portrait)
