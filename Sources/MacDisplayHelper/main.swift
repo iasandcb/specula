@@ -225,7 +225,8 @@ private enum MainDisplayProbe {
     static let appleSilicon = false
     #endif
 
-    static func sensedDegrees(_ display: CGDirectDisplayID) -> Int? {
+    /// CoreGraphics display queries are thread-safe, so the poll can read them without hopping back to the main actor.
+    nonisolated static func sensedDegrees(_ display: CGDirectDisplayID) -> Int? {
         guard let symbol = dlsym(UnsafeMutableRawPointer(bitPattern: -2), "CGDisplayRotation") else { return nil }
         let function = unsafeBitCast(symbol, to: (@convention(c) (CGDirectDisplayID) -> Double).self)
         return DisplayRotationAngle.normalized(Int(function(display).rounded()))
@@ -277,6 +278,8 @@ private enum MainDisplayProbe {
         let display: CGDirectDisplayID
         let beforePixels: PixelBox
         let beforeBounds: PixelBox
+        /// Runs on the main actor: `panel` is the MPDisplay `setOrientation:` was sent to.
+        @MainActor
         func reached() -> Bool {
             if MainDisplayProbe.sensedDegrees(display) == degrees || panel.orientation == degrees { return true }
             let pixels = MainDisplayProbe.pixelBox(display)
@@ -309,13 +312,13 @@ private enum MainDisplayProbe {
         return .finished(iokitApply(degrees: degrees, display: display, current: sensed))
     }
 
-    private struct PixelBox: Equatable { var width: Int; var height: Int }
+    private struct PixelBox: Equatable, Sendable { var width: Int; var height: Int }
 
-    private static func pixelBox(_ display: CGDirectDisplayID) -> PixelBox {
+    private nonisolated static func pixelBox(_ display: CGDirectDisplayID) -> PixelBox {
         PixelBox(width: Int(CGDisplayPixelsWide(display)), height: Int(CGDisplayPixelsHigh(display)))
     }
 
-    private static func boundsBox(_ display: CGDirectDisplayID) -> PixelBox {
+    private nonisolated static func boundsBox(_ display: CGDirectDisplayID) -> PixelBox {
         let bounds = CGDisplayBounds(display)
         return PixelBox(width: Int(bounds.width.rounded()), height: Int(bounds.height.rounded()))
     }
