@@ -87,6 +87,15 @@ final class DisplayLeaseTests: XCTestCase {
         XCTAssertEqual(DisplayOrientationCheck.failureTitle(degrees: 90), "세로 모드")
         XCTAssertEqual(DisplayOrientationCheck.failureTitle(degrees: 45), "화면 회전")
     }
+    func testUnauthorizedHelperResponseAsksForThePairingCode() {
+        let denied = Data(#"{"message":"맥의 연결 코드로 다시 연결해 주세요."}"#.utf8)
+        XCTAssertEqual(DisplayHTTP.interpret(status: 401, body: denied, isPairing: false), .failure(.pairingRequired))
+        XCTAssertEqual(DisplayHTTP.interpret(status: 401, body: Data(), isPairing: false), .failure(.pairingRequired))
+        XCTAssertEqual(DisplayHTTP.interpret(status: 401, body: denied, isPairing: true), .failure(.message("맥의 연결 코드로 다시 연결해 주세요.")))
+        XCTAssertNotEqual(DisplayHTTP.interpret(status: 401, body: denied, isPairing: false), .failure(.message(DisplayHTTP.connectionLost)))
+        XCTAssertEqual(DisplayHTTP.interpret(status: 200, body: Data("{}".utf8), isPairing: false), .success(Data("{}".utf8)))
+        XCTAssertEqual(DisplayHTTP.interpret(status: 500, body: Data(), isPairing: false), .failure(.message(DisplayHTTP.unreachable)))
+    }
     func testResolutionListUsesAShortTimeout() {
         XCTAssertLessThanOrEqual(DisplayHTTP.listTimeout, 3)
         XCTAssertGreaterThan(DisplayHTTP.rotationTimeout, 5)
