@@ -4,11 +4,13 @@ import XCTest
 final class EncodingTests: XCTestCase {
     func testDefaultEncodingsStayCompatibleWithMacScreenSharing() {
         let safe = RFBEncodings.advertised()
-        XCTAssertEqual(safe, [RFBEncodings.copyRect, RFBEncodings.raw, RFBEncodings.desktopSize, RFBEncodings.lastRect])
-        XCTAssertFalse(safe.contains(RFBEncodings.zrle))
+        XCTAssertEqual(safe, [RFBEncodings.zrle, RFBEncodings.copyRect, RFBEncodings.raw, RFBEncodings.desktopSize, RFBEncodings.lastRect])
         XCTAssertFalse(safe.contains(RFBEncodings.cursor))
         let message = RFBEncodings.setEncodingsMessage()
-        XCTAssertEqual(Array(message.prefix(4)), [2, 0, 0, 4])
+        XCTAssertEqual(Array(message.prefix(4)), [2, 0, 0, 5])
+        let withoutZRLE = RFBEncodings.advertised(enableZRLE: false)
+        XCTAssertFalse(withoutZRLE.contains(RFBEncodings.zrle))
+        XCTAssertFalse(withoutZRLE.contains(RFBEncodings.cursor))
         let enabled = RFBEncodings.advertised(enableZRLE: true, enableCursor: true)
         XCTAssertEqual(enabled.first, RFBEncodings.zrle)
         XCTAssertLessThan(enabled.firstIndex(of: RFBEncodings.copyRect)!, enabled.firstIndex(of: RFBEncodings.raw)!)

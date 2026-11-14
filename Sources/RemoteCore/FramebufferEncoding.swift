@@ -9,9 +9,9 @@ public enum RFBEncodings {
     public static let lastRect = 0xFFFF_FF20
     public static let desktopSize = 0xFFFF_FF21
 
-    /// macOS Screen Sharing drops the session when ZRLE or the Cursor pseudo-encoding is mishandled.
-    /// Those stay off unless explicitly enabled. CopyRect, Raw, DesktopSize, and LastRect are the safe set.
-    public static func advertised(enableZRLE: Bool = false, enableCursor: Bool = false) -> [Int] {
+    /// ZRLE is advertised by default. A 1600×1200 Screen Sharing capture decoded 100 ZRLE updates on one zlib stream.
+    /// Cursor stays off: that capture advertised it, and the server never sent a cursor rectangle.
+    public static func advertised(enableZRLE: Bool = true, enableCursor: Bool = false) -> [Int] {
         var list: [Int] = []
         if enableZRLE { list.append(zrle) }
         list.append(copyRect)
@@ -22,7 +22,7 @@ public enum RFBEncodings {
         return list
     }
 
-    public static func setEncodingsMessage(enableZRLE: Bool = false, enableCursor: Bool = false) -> Data {
+    public static func setEncodingsMessage(enableZRLE: Bool = true, enableCursor: Bool = false) -> Data {
         let values = advertised(enableZRLE: enableZRLE, enableCursor: enableCursor)
         var bytes: [UInt8] = [2, 0]
         bytes.append(contentsOf: Wire.u16(values.count))

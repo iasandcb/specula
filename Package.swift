@@ -35,7 +35,11 @@ var targets: [Target] = [
         name: "RemoteCore",
         dependencies: remoteDependencies
     ),
-    .testTarget(name: "RemoteCoreTests", dependencies: testDependencies)
+    .testTarget(
+        name: "RemoteCoreTests",
+        dependencies: testDependencies,
+        resources: [.copy("Fixtures")]
+    )
 ]
 
 #if os(Linux)
