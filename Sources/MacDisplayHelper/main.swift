@@ -96,7 +96,7 @@ final class DisplayHelper: NSObject, NSApplicationDelegate {
     private func showMessage(_ text: String) { NSLog("Specula Display: %@", text); let alert = NSAlert(); alert.messageText = text; alert.runModal() }
     private func modes() -> [CGDisplayMode] {
         (CGDisplayCopyAllDisplayModes(CGMainDisplayID(), [kCGDisplayShowDuplicateLowResolutionModes: true] as CFDictionary) as? [CGDisplayMode] ?? [])
-            .filter { $0.isUsableForDesktopGUI() && $0.width >= 800 && $0.pixelWidth * $0.pixelHeight <= 16_777_216 }
+            .filter { $0.isUsableForDesktopGUI() && $0.width >= 800 && $0.pixelWidth * $0.pixelHeight <= 6016 * 3384 }
     }
     private func info(_ mode: CGDisplayMode) -> RemoteDisplayMode {
         RemoteDisplayMode(id: UInt32(bitPattern: mode.ioDisplayModeID), width: mode.width, height: mode.height, pixelWidth: mode.pixelWidth, pixelHeight: mode.pixelHeight)

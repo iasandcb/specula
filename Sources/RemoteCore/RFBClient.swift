@@ -180,14 +180,16 @@ public actor RFBClient {
                         pending.append(.cursor(cursor))
                     }
                 case RFBEncodings.raw:
-                    guard w > 0, h > 0, w <= 8192, h <= 8192 else { throw RFBError.invalid("화면 데이터의 범위가 잘못되었습니다.") }
-                    pending.append(.raw(x: x, y: y, w: w, h: h, data: try await read(w * h * 4)))
+                    guard let bytes = FrameLimits.rawBytes(width: w, height: h) else { throw RFBError.invalid("화면 데이터의 범위가 잘못되었습니다.") }
+                    pending.append(.raw(x: x, y: y, w: w, h: h, data: try await read(bytes)))
                 case RFBEncodings.copyRect:
                     let fromX = try await number(2), fromY = try await number(2)
                     pending.append(.copy(x: x, y: y, w: w, h: h, fromX: fromX, fromY: fromY))
                 case RFBEncodings.zrle:
                     let length = try await number(4)
-                    guard (1...8_000_000).contains(length) else { throw RFBError.invalid("화면 압축 크기가 잘못되었습니다.") }
+                    guard let limit = ZRLEBudget.compressedBytes(width: w, height: h), (1...limit).contains(length) else {
+                        throw RFBError.invalid("화면 압축 크기가 잘못되었습니다.")
+                    }
                     pending.append(.zrle(x: x, y: y, w: w, h: h, data: try await read(length)))
                 default:
                     throw RFBError.invalid("지원하지 않는 화면 압축 방식입니다: \(encoding)")
@@ -228,8 +230,7 @@ public actor RFBClient {
             case .zrle(let x, let y, let w, let h, let data):
                 do {
                     guard x + w <= width, y + h <= height else { throw RFBError.invalid("화면 데이터의 범위가 잘못되었습니다.") }
-                    let plain = try inflate.inflate(data)
-                    let rgba = try zrle.decode(width: w, height: h, uncompressed: plain)
+                    let rgba = try inflate.decodeZRLE(data, width: w, height: h, decoder: &zrle)
                     try blit(rgba, x: x, y: y, w: w, h: h)
                 } catch { throw contextual(RFBEncodings.zrle, x, y, w, h, error) }
                 pixelsChanged = true
@@ -258,7 +259,7 @@ public actor RFBClient {
     }
 
     private func allocate() throws {
-        guard width > 0, height > 0, width <= 8192, height <= 8192, width * height <= 16_777_216 else {
+        guard FrameLimits.contains(width: width, height: height) else {
             throw RFBError.invalid("지원 가능한 화면 크기를 초과했습니다.")
         }
         pixels = Data(repeating: 0, count: width * height * 4)

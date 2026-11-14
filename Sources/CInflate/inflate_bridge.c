@@ -4,6 +4,7 @@
 
 struct inflate_session {
     z_stream stream;
+    int chunk_done;
 };
 
 inflate_session *inflate_session_create(void) {
@@ -71,4 +72,37 @@ inflate_chunk inflate_session_process(inflate_session *session, const uint8_t *i
     chunk.count = produced;
     chunk.status = 0;
     return chunk;
+}
+
+int inflate_session_read(inflate_session *session, const uint8_t *input, size_t input_len, int provide_input,
+                         uint8_t *out, size_t max_out, size_t *written) {
+    if (written) *written = 0;
+    if (!session || !written || !out || max_out == 0) return -1;
+    if (provide_input) {
+        if ((input == NULL && input_len > 0) || input_len > 0xffffffffu) return -1;
+        session->chunk_done = 0;
+        session->stream.next_in = (Bytef *)(input ? input : (const uint8_t *)"");
+        session->stream.avail_in = (uInt)input_len;
+    }
+    if (session->chunk_done) return 1;
+    if (max_out > 0xffffffffu) max_out = 0xffffffffu;
+    session->stream.next_out = out;
+    session->stream.avail_out = (uInt)max_out;
+    int status = inflate(&session->stream, Z_NO_FLUSH);
+    size_t got = (size_t)max_out - session->stream.avail_out;
+    session->stream.next_out = Z_NULL;
+    session->stream.avail_out = 0;
+    *written = got;
+    if (status == Z_STREAM_END) {
+        session->chunk_done = 1;
+        return got > 0 ? 0 : 1;
+    }
+    if (status == Z_OK || status == Z_BUF_ERROR) {
+        if (got == 0 && session->stream.avail_in == 0) {
+            session->chunk_done = 1;
+            return 1;
+        }
+        return 0;
+    }
+    return -1;
 }
