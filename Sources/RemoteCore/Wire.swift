@@ -7,7 +7,18 @@ import CCryptoShim
 
 public enum RFBError: LocalizedError {
     case invalid(String)
-    public var errorDescription: String? { if case .invalid(let message) = self { return message }; return nil }
+    /// The peer closed the socket or stopped sending. Retrying may help; a protocol error will not.
+    case closed
+    public var errorDescription: String? {
+        switch self {
+        case .invalid(let message): return message
+        case .closed: return "맥이 연결을 종료했습니다."
+        }
+    }
+    public var isProtocolFailure: Bool {
+        if case .invalid = self { return true }
+        return false
+    }
 }
 
 /// RFB PointerEvent button mask. Bit 0 is the left button (RFC 6143 §7.5.5).

@@ -64,6 +64,30 @@ final class EncodingTests: XCTestCase {
         XCTAssertEqual(Array(mixed.dropFirst(4)), [255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255])
     }
 
+    func testZRLEReusesThePreviousPalette() throws {
+        // 65×1 is two tiles: 64 pixels, then 1. The second tile must not carry its own palette.
+        var bytes = Data([2, 0, 0, 0, 255, 255, 255])
+        bytes.append(contentsOf: repeatElement(0, count: 8))
+        bytes.append(contentsOf: [127, 0b1000_0000])
+        let image = try ZRLERect.decode(width: 65, height: 1, uncompressed: bytes)
+        XCTAssertEqual(image.count, 65 * 4)
+        XCTAssertEqual(Array(image.prefix(4)), [0, 0, 0, 255])
+        XCTAssertEqual(Array(image.suffix(4)), [255, 255, 255, 255])
+
+        var runs = Data([130, 0, 0, 0, 255, 255, 255, 129, 63])
+        runs.append(129)
+        runs.append(0)
+        var decoder = ZRLEDecoder()
+        let first = try decoder.decode(width: 64, height: 1, uncompressed: runs.prefix(9))
+        XCTAssertEqual(Array(first.prefix(4)), [255, 255, 255, 255])
+        let reused = try decoder.decode(width: 1, height: 1, uncompressed: runs.suffix(2))
+        XCTAssertEqual(Array(reused), [0, 0, 0, 255])
+
+        XCTAssertThrowsError(try ZRLERect.decode(width: 1, height: 1, uncompressed: Data([127, 0]))) { error in
+            XCTAssertEqual(error.localizedDescription, "재사용할 ZRLE 팔레트가 없습니다.")
+        }
+    }
+
     func testInflateResumesASyncFlushedStream() throws {
         let stream = InflateStream()
         let hello = try stream.inflate(Data(hex: "789cca48cdc9c907000000ffff"))

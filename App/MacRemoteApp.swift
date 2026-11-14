@@ -20,6 +20,7 @@ final class Session: ObservableObject {
     private var input: Task<Void, Never>?
     private var generation = UUID()
     private var login: Login?
+    private var reconnectWait: Task<Void, Never>?
     private var resume = SessionResume()
     private var backgroundBox: BackgroundBox?
     private var pendingRaster: (Frame, UUID)?
@@ -51,6 +52,7 @@ final class Session: ObservableObject {
     }
     func disconnect() {
         let actions = resume.userDisconnected()
+        reconnectWait?.cancel(); reconnectWait = nil
         generation = UUID(); task?.cancel(); input?.cancel()
         let previous = client
         client = nil
@@ -89,7 +91,9 @@ final class Session: ObservableObject {
     func pointer(_ point: CGPoint, buttons: UInt8) { enqueue { try await $0.pointer(x: Int(point.x), y: Int(point.y), buttons: buttons) } }
 
     private func startLink(reconnect: Bool) {
-        guard let login else { return }
+        guard let login, !resume.userEnded else { return }
+        if !reconnect { reconnectWait?.cancel() }
+        reconnectWait = nil
         let id = UUID()
         generation = id
         task?.cancel(); input?.cancel()
@@ -102,6 +106,7 @@ final class Session: ObservableObject {
         let host = login.host, port = login.port, username = login.username, password = login.password
         task = Task { [self] in
             var failure: String?
+            var protocolError = false
             do {
                 try await client.run(host: host, port: port, username: username, password: password, onProgress: { progress in
                     Task { @MainActor [weak self] in
@@ -112,8 +117,7 @@ final class Session: ObservableObject {
                     Task { @MainActor [weak self] in self?.enqueueFrame(frame, generation: id) }
                 }, onReady: { name in
                     Task { @MainActor [weak self] in
-                        guard let self, self.generation == id else { return }
-                        self.resume.noteLive()
+                        guard let self, self.generation == id, self.resume.acceptsSessionEvents else { return }
                         self.ready = true
                         self.status = name
                         self.display.beginSession()
@@ -121,27 +125,32 @@ final class Session: ObservableObject {
                     }
                 }, onCursor: { cursor in
                     Task { @MainActor [weak self] in
-                        guard let self, self.generation == id else { return }
+                        guard let self, self.generation == id, self.resume.acceptsSessionEvents else { return }
                         if cursor.isHidden { self.serverCursorHidden = true; self.remoteCursor = nil }
                         else { self.serverCursorHidden = false; self.remoteCursor = cursor }
                     }
                 })
             } catch is CancellationError {
+            } catch let error as RFBError {
+                failure = error.localizedDescription
+                protocolError = error.isProtocolFailure
             } catch { failure = error.localizedDescription }
             guard generation == id else { return }
-            finishLink(failure: failure)
+            finishLink(failure: failure, protocolError: protocolError)
         }
     }
-    private func finishLink(failure: String?) {
+    private func finishLink(failure: String?, protocolError: Bool) {
         ready = false; optionHeld = false
-        let actions = resume.linkClosed()
+        let actions = resume.linkClosed(protocolError ? .protocolError : .transport)
         if !resume.presentsRemote {
             active = false; image = nil
             remoteCursor = nil; serverCursorHidden = false
             pendingRaster = nil; pendingImage = nil
             display.endSession()
             status = failure ?? "연결이 끊겼습니다"
-        } else if !actions.contains(.reconnect), let failure {
+        } else if actions.contains(where: { if case .reconnect = $0 { return true }; return false }) {
+            status = "다시 연결하는 중…"
+        } else if let failure {
             status = failure
         }
         perform(actions)
@@ -151,8 +160,18 @@ final class Session: ObservableObject {
             switch action {
             case .beginBackgroundTask: beginBackgroundHold()
             case .endBackgroundTask: endBackgroundHold()
-            case .reconnect: startLink(reconnect: true)
+            case .reconnect(let delay): scheduleReconnect(afterMilliseconds: delay)
             }
+        }
+    }
+    private func scheduleReconnect(afterMilliseconds delay: Int) {
+        reconnectWait?.cancel()
+        status = "다시 연결하는 중…"
+        reconnectWait = Task { [weak self] in
+            if delay > 0 { try? await Task.sleep(nanoseconds: UInt64(delay) * 1_000_000) }
+            guard !Task.isCancelled, let self else { return }
+            guard self.resume.link == .reconnecting, !self.resume.userEnded else { return }
+            self.startLink(reconnect: true)
         }
     }
     private func beginBackgroundHold() {
@@ -181,7 +200,8 @@ final class Session: ObservableObject {
         UIApplication.shared.endBackgroundTask(id)
     }
     private func enqueueFrame(_ frame: Frame, generation id: UUID) {
-        guard generation == id else { return }
+        guard generation == id, resume.acceptsSessionEvents else { return }
+        resume.noteFrame()
         if presenter.onFrame == nil { presenter.onFrame = { [weak self] in self?.publishFrame() } }
         pendingRaster = (frame, id)
         startRaster()
