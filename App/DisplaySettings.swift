@@ -9,6 +9,7 @@ final class DisplayController: ObservableObject {
     @Published var paired = false
     @Published var portrait = false
     private var preferredModeID: UInt32?
+    private var rotateAfterPairing = false
     private var host = ""
     private var token: String?
     private var heartbeat: Task<Void, Never>?
@@ -62,6 +63,9 @@ final class DisplayController: ObservableObject {
             self.token = response.token; self.paired = true; self.startHeartbeat()
             try await self.load()
         }
+        guard paired, rotateAfterPairing else { return }
+        rotateAfterPairing = false
+        await rotateMainDisplay()
     }
     func refresh() async { await perform { try await self.load() } }
     private func load() async throws {
@@ -79,18 +83,22 @@ final class DisplayController: ObservableObject {
         guard let mode = DisplayReconnect.mode(reconnecting: true, selected: preferredModeID) else { return }
         await change(mode)
     }
+    func cancelPendingRotation() { rotateAfterPairing = false }
     func togglePortrait() async {
         guard paired else {
-            error = "세로 모드는 해상도 보조 앱에 연결한 뒤 사용할 수 있습니다."
+            rotateAfterPairing = true
+            error = "세로 모드를 쓰려면 먼저 맥의 연결 코드를 입력하세요."
             return
         }
+        await rotateMainDisplay()
+    }
+    private func rotateMainDisplay() async {
         await perform {
             let current = try JSONDecoder().decode(DisplayRotation.self, from: await self.request(path: "/rotation"))
-            guard current.supported else { throw RFBError.invalid("이 디스플레이는 회전을 지원하지 않습니다.") }
             let next = DisplayRotationAngle.portraitToggle(from: current.degrees)
             let body = try JSONEncoder().encode(SetDisplayRotation(degrees: next))
             let updated = try JSONDecoder().decode(DisplayRotation.self, from: await self.request(path: "/rotation", body: body))
-            guard updated.supported else { throw RFBError.invalid("이 디스플레이는 회전을 지원하지 않습니다.") }
+            guard updated.supported else { throw RFBError.invalid("이 디스플레이의 화면을 회전하지 못했습니다.") }
             self.portrait = updated.degrees == 90
         }
     }

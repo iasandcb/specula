@@ -64,6 +64,14 @@ final class DisplayLeaseTests: XCTestCase {
         let request = try JSONDecoder().decode(SetDisplayRotation.self, from: Data(#"{"degrees":270}"#.utf8))
         XCTAssertEqual(request.degrees, 270)
     }
+    func testAppleSiliconRotationDoesNotUseTheIOKitProbe() {
+        XCTAssertEqual(DisplayRotationRoute.select(monitorPanelReady: true, monitorPanelRejected: false, appleSilicon: true, iokitFramebuffer: false), .monitorPanel)
+        XCTAssertEqual(DisplayRotationRoute.select(monitorPanelReady: false, monitorPanelRejected: false, appleSilicon: true, iokitFramebuffer: true), .unsupported)
+        XCTAssertEqual(DisplayRotationRoute.select(monitorPanelReady: false, monitorPanelRejected: true, appleSilicon: false, iokitFramebuffer: true), .unsupported)
+        XCTAssertEqual(DisplayRotationRoute.select(monitorPanelReady: false, monitorPanelRejected: false, appleSilicon: false, iokitFramebuffer: true), .iokit)
+        XCTAssertEqual(DisplayRotationRoute.select(monitorPanelReady: true, monitorPanelRejected: false, appleSilicon: false, iokitFramebuffer: true), .monitorPanel)
+        XCTAssertEqual(DisplayRotationRoute.select(monitorPanelReady: false, monitorPanelRejected: false, appleSilicon: false, iokitFramebuffer: false), .unsupported)
+    }
     func testPortraitFramebufferStaysTallInTheView() {
         let frame = PointerMapping.displayedFrame(viewWidth: 800, viewHeight: 400, imageWidth: 1080, imageHeight: 1920, fill: false)
         XCTAssertEqual(frame?.height ?? 0, 400, accuracy: 0.01)

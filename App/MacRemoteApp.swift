@@ -283,6 +283,8 @@ struct RemoteView: View {
     @State private var keyboard = true
     @State private var fillScreen = false
     @State private var displaySettings = false
+    @State private var rotationAlert = false
+    @State private var rotationAlertText = ""
     @Environment(\.verticalSizeClass) private var verticalSizeClass
     @Environment(\.scenePhase) private var phase
     private var fullScreen: Bool { session.active && (verticalSizeClass == .compact || UIDevice.current.userInterfaceIdiom == .pad) }
@@ -295,7 +297,7 @@ struct RemoteView: View {
                     .overlay(alignment: .topTrailing) {
                         Menu {
                             Button(session.optionHeld ? "⌥ Option 끄기" : "⌥ Option 켜기") { session.toggleOption() }
-                            Button("맥 해상도") { displaySettings = true }
+                            Button("맥 해상도") { session.display.cancelPendingRotation(); displaySettings = true }
                             Button(session.display.portrait ? "가로 모드" : "세로 모드", action: togglePortrait)
                             Button(fillScreen ? "전체 화면 보기" : "화면 채우기") { fillScreen.toggle() }
                             Button("입력기 전환") {
@@ -378,7 +380,7 @@ struct RemoteView: View {
                                 session.key(0xffe3, down: true); session.stroke(32); session.key(0xffe3, down: false)
                             }
                             Spacer()
-                            Button("해상도") { displaySettings = true }
+                            Button("해상도") { session.display.cancelPendingRotation(); displaySettings = true }
                             Button(session.display.portrait ? "가로 모드" : "세로 모드", action: togglePortrait)
                             Button(keyboard ? "키보드 숨기기" : "키보드 표시") { keyboard.toggle() }
                         }.font(.caption).padding(.horizontal)
@@ -396,18 +398,33 @@ struct RemoteView: View {
             }
             }
         }
-        .sheet(isPresented: $displaySettings) { DisplaySettingsView(controller: session.display) }
+        .sheet(isPresented: $displaySettings, onDismiss: {
+            if !session.display.paired { session.display.cancelPendingRotation() }
+        }) { DisplaySettingsView(controller: session.display) }
         .onChange(of: phase) { _, newValue in session.sceneChanged(newValue) }
         .alert("연결하지 못했습니다", isPresented: $session.showConnectionAlert) {
             Button("확인", role: .cancel) {}
         } message: {
             Text(session.connectionError)
         }
+        .alert("세로 모드", isPresented: $rotationAlert) {
+            Button("확인", role: .cancel) {}
+        } message: {
+            Text(rotationAlertText)
+        }
     }
     private func togglePortrait() {
         Task {
+            let needsPairing = !session.display.paired
             await session.display.togglePortrait()
-            if !session.display.error.isEmpty { displaySettings = true }
+            if needsPairing {
+                displaySettings = true
+                return
+            }
+            if !session.display.error.isEmpty {
+                rotationAlertText = session.display.error
+                rotationAlert = true
+            }
         }
     }
     private func submitConnection(from field: ConnectFocus) {

@@ -69,6 +69,22 @@ public enum DisplayRotationAngle {
     }
 }
 
+/// Which mechanism may rotate the main display.
+/// Apple Silicon framebuffers are `IOMobileFramebuffer` and ignore the IOKit probe, so that path is Intel only.
+public enum DisplayRotationRoute: Equatable, Sendable {
+    case monitorPanel
+    case iokit
+    case unsupported
+
+    /// `monitorPanelRejected` means the panel was found and reported that it cannot rotate.
+    /// That answer stands on Intel too: do not fall through to the IOKit probe.
+    public static func select(monitorPanelReady: Bool, monitorPanelRejected: Bool, appleSilicon: Bool, iokitFramebuffer: Bool) -> Self {
+        if monitorPanelReady { return .monitorPanel }
+        if monitorPanelRejected || appleSilicon || !iokitFramebuffer { return .unsupported }
+        return .iokit
+    }
+}
+
 public struct DisplaySnapshot: Codable, Sendable {
     public let current: RemoteDisplayMode
     public let modes: [RemoteDisplayMode]

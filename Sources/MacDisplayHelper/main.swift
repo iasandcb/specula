@@ -3,6 +3,7 @@ import AppKit
 import CoreGraphics
 import Darwin
 import IOKit
+import ObjectiveC
 import Security
 import DisplaySupport
 
@@ -151,14 +152,12 @@ final class DisplayHelper: NSObject, NSApplicationDelegate {
         self.original = nil; originalDisplay = nil; lease.clear()
     }
     private func rotationState() -> DisplayRotation {
-        let display = CGMainDisplayID()
-        let degrees = MainDisplayProbe.sensedDegrees(display) ?? commandedRotation ?? 0
-        return DisplayRotation(degrees: degrees, supported: MainDisplayProbe.framebuffer(for: display) != nil)
+        MainDisplayProbe.current()
     }
     private func setRotation(_ degrees: Int) throws -> DisplayRotation {
         guard let angle = DisplayRotationAngle.normalized(degrees) else { throw HelperError.message("회전 각도는 0, 90, 180, 270만 사용할 수 있습니다.") }
         let display = CGMainDisplayID()
-        let before = MainDisplayProbe.sensedDegrees(display) ?? commandedRotation ?? 0
+        let before = MainDisplayProbe.current(display: display).degrees
         let applied = MainDisplayProbe.apply(degrees: angle, display: display)
         guard applied.supported else { return applied }
         if originalRotation == nil, applied.degrees != before { originalRotation = before }
@@ -205,17 +204,69 @@ final class DisplayHelper: NSObject, NSApplicationDelegate {
         connection.send(content: Data(header.utf8) + body, completion: .contentProcessed { _ in connection.cancel() })
     }
 }
-/// fb-rotate mechanism: `IOServiceRequestProbe` with `kIOFBSetTransform` (0x400) and the quadrant in bits 7–8.
-/// External panels on a MacBook Pro accept this; the built-in panel often rejects it, which is reported as unsupported.
+/// Apple Silicon displays are `IOMobileFramebuffer` and ignore `IOServiceRequestProbe`.
+/// The working path is MonitorPanel's `MPDisplay setOrientation:`, the same setter displayplacer uses.
+/// That tool does not call `lockAccess` or `notifyReconfigure`, and neither does this helper.
+/// The IOKit probe remains only as a fallback for Intel Macs when MonitorPanel cannot answer.
 private enum MainDisplayProbe {
+    #if arch(arm64) || arch(arm64e)
+    static let appleSilicon = true
+    #else
+    static let appleSilicon = false
+    #endif
+
     static func sensedDegrees(_ display: CGDirectDisplayID) -> Int? {
         guard let symbol = dlsym(UnsafeMutableRawPointer(bitPattern: -2), "CGDisplayRotation") else { return nil }
         let function = unsafeBitCast(symbol, to: (@convention(c) (CGDirectDisplayID) -> Double).self)
         return DisplayRotationAngle.normalized(Int(function(display).rounded()))
     }
 
+    static func current(display: CGDirectDisplayID = CGMainDisplayID()) -> DisplayRotation {
+        let sensed = sensedDegrees(display) ?? 0
+        if let panel = MonitorPanelRotation.lookup(display) {
+            let degrees = panel.orientation ?? sensed
+            let route = DisplayRotationRoute.select(monitorPanelReady: panel.canChangeOrientation, monitorPanelRejected: !panel.canChangeOrientation, appleSilicon: appleSilicon, iokitFramebuffer: false)
+            return DisplayRotation(degrees: degrees, supported: route == .monitorPanel)
+        }
+        let route = DisplayRotationRoute.select(monitorPanelReady: false, monitorPanelRejected: false, appleSilicon: appleSilicon, iokitFramebuffer: hasIntelFramebuffer(display))
+        return DisplayRotation(degrees: sensed, supported: route == .iokit)
+    }
+
     static func apply(degrees: Int, display: CGDirectDisplayID = CGMainDisplayID()) -> DisplayRotation {
-        let current = sensedDegrees(display) ?? 0
+        let sensed = sensedDegrees(display) ?? 0
+        if let panel = MonitorPanelRotation.lookup(display) {
+            let current = panel.orientation ?? sensed
+            guard DisplayRotationRoute.select(monitorPanelReady: panel.canChangeOrientation, monitorPanelRejected: !panel.canChangeOrientation, appleSilicon: appleSilicon, iokitFramebuffer: false) == .monitorPanel else {
+                return DisplayRotation(degrees: current, supported: false)
+            }
+            guard panel.setOrientation(degrees), confirm(display, panel: panel, degrees: degrees) else {
+                return DisplayRotation(degrees: panel.orientation ?? current, supported: false)
+            }
+            return DisplayRotation(degrees: degrees, supported: true)
+        }
+        guard DisplayRotationRoute.select(monitorPanelReady: false, monitorPanelRejected: false, appleSilicon: appleSilicon, iokitFramebuffer: hasIntelFramebuffer(display)) == .iokit else {
+            return DisplayRotation(degrees: sensed, supported: false)
+        }
+        return iokitApply(degrees: degrees, display: display, current: sensed)
+    }
+
+    /// displayplacer waits on `CGDisplayRotation` after `setOrientation:`. A short wait fits the phone's request timeout.
+    private static func confirm(_ display: CGDirectDisplayID, panel: MonitorPanelRotation.Panel, degrees: Int) -> Bool {
+        let deadline = Date().addingTimeInterval(2)
+        while true {
+            if sensedDegrees(display) == degrees || panel.orientation == degrees { return true }
+            if Date() >= deadline { return false }
+            Thread.sleep(forTimeInterval: 0.1)
+        }
+    }
+
+    private static func hasIntelFramebuffer(_ display: CGDirectDisplayID) -> Bool {
+        guard !appleSilicon, let service = framebuffer(for: display) else { return false }
+        IOObjectRelease(service)
+        return true
+    }
+
+    private static func iokitApply(degrees: Int, display: CGDirectDisplayID, current: Int) -> DisplayRotation {
         guard let options = DisplayRotationAngle.probeOptions(degrees: degrees), let service = framebuffer(for: display) else {
             return DisplayRotation(degrees: current, supported: false)
         }
@@ -263,6 +314,70 @@ private enum MainDisplayProbe {
     private static func number(_ entry: io_registry_entry_t, _ key: String) -> UInt32? {
         guard let property = IORegistryEntryCreateCFProperty(entry, key as CFString, kCFAllocatorDefault, 0)?.takeRetainedValue() else { return nil }
         return (property as? NSNumber)?.uint32Value
+    }
+}
+
+/// Private MonitorPanel. Loaded with dlopen so the helper still builds where the framework is absent.
+/// `isMainDisplay` is not a key on `MPDisplay` and must not be read; match `displayID` to `CGMainDisplayID()`.
+private enum MonitorPanelRotation {
+    struct Panel {
+        fileprivate let manager: NSObject
+        fileprivate let display: NSObject
+        var canChangeOrientation: Bool { MonitorPanelRotation.flag(display, "canChangeOrientation") }
+        var orientation: Int? { MonitorPanelRotation.integer(display, "orientation").flatMap(DisplayRotationAngle.normalized) }
+        func setOrientation(_ degrees: Int) -> Bool {
+            MonitorPanelRotation.setInteger(display, "setOrientation:", Int32(degrees))
+        }
+    }
+
+    private static let framework: UnsafeMutableRawPointer? = dlopen(
+        "/System/Library/PrivateFrameworks/MonitorPanel.framework/MonitorPanel",
+        RTLD_LAZY
+    )
+
+    static func lookup(_ id: CGDirectDisplayID) -> Panel? {
+        guard framework != nil, let managerClass = NSClassFromString("MPDisplayMgr") as? NSObject.Type else { return nil }
+        let manager = managerClass.init()
+        guard let displays = displays(of: manager) else { return nil }
+        guard let display = displays.first(where: { displayID($0) == id }) else { return nil }
+        return Panel(manager: manager, display: display)
+    }
+
+    /// `displays` is the one key this path reads. Every other access is a selector checked with `responds(to:)`.
+    private static func displays(of manager: NSObject) -> [NSObject]? {
+        let selector = NSSelectorFromString("displays")
+        guard manager.responds(to: selector) else { return nil }
+        guard let value = manager.value(forKey: "displays") else { return nil }
+        if let objects = value as? [NSObject] { return objects }
+        guard let array = value as? NSArray else { return nil }
+        return array.compactMap { $0 as? NSObject }
+    }
+
+    private static func displayID(_ display: NSObject) -> CGDirectDisplayID? {
+        guard let value = integer(display, "displayID") else { return nil }
+        return CGDirectDisplayID(bitPattern: Int32(truncatingIfNeeded: value))
+    }
+
+    private static func integer(_ object: NSObject, _ name: String) -> Int? {
+        let selector = NSSelectorFromString(name)
+        guard object.responds(to: selector), let method = class_getInstanceMethod(object_getClass(object), selector) else { return nil }
+        let function = unsafeBitCast(method_getImplementation(method), to: (@convention(c) (AnyObject, Selector) -> Int32).self)
+        return Int(function(object, selector))
+    }
+
+    private static func flag(_ object: NSObject, _ name: String) -> Bool {
+        let selector = NSSelectorFromString(name)
+        guard object.responds(to: selector), let method = class_getInstanceMethod(object_getClass(object), selector) else { return false }
+        let function = unsafeBitCast(method_getImplementation(method), to: (@convention(c) (AnyObject, Selector) -> UInt8).self)
+        return function(object, selector) != 0
+    }
+
+    private static func setInteger(_ object: NSObject, _ name: String, _ value: Int32) -> Bool {
+        let selector = NSSelectorFromString(name)
+        guard object.responds(to: selector), let method = class_getInstanceMethod(object_getClass(object), selector) else { return false }
+        let function = unsafeBitCast(method_getImplementation(method), to: (@convention(c) (AnyObject, Selector, Int32) -> Void).self)
+        function(object, selector, value)
+        return true
     }
 }
 
