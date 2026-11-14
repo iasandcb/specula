@@ -1,0 +1,4 @@
+module CCryptoShim {
+    header "CCryptoShim.h"
+    export *
+}

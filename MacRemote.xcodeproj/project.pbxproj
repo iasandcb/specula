@@ -17,6 +17,10 @@
 		000000000000000000000142 /* App/DisplaySettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000140 /* App/DisplaySettings.swift */; };
 		000000000000000000000143 /* Sources/DisplaySupport/DisplayMessages.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000141 /* Sources/DisplaySupport/DisplayMessages.swift */; };
 		000000000000000000000147 /* Sources/RemoteCore/PointerInput.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000146 /* Sources/RemoteCore/PointerInput.swift */; };
+		00000000000000000000014C /* Sources/RemoteCore/Inflate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000148 /* Sources/RemoteCore/Inflate.swift */; };
+		00000000000000000000014D /* Sources/RemoteCore/FramebufferEncoding.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000149 /* Sources/RemoteCore/FramebufferEncoding.swift */; };
+		00000000000000000000014E /* Sources/RemoteCore/SessionResume.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00000000000000000000014A /* Sources/RemoteCore/SessionResume.swift */; };
+		00000000000000000000014F /* Sources/CInflate/inflate_bridge.c in Sources */ = {isa = PBXBuildFile; fileRef = 00000000000000000000014B /* Sources/CInflate/inflate_bridge.c */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -30,6 +34,10 @@
 		000000000000000000000140 /* App/DisplaySettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = App/DisplaySettings.swift; sourceTree = SOURCE_ROOT; };
 		000000000000000000000141 /* Sources/DisplaySupport/DisplayMessages.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/DisplaySupport/DisplayMessages.swift; sourceTree = SOURCE_ROOT; };
 		000000000000000000000146 /* Sources/RemoteCore/PointerInput.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/RemoteCore/PointerInput.swift; sourceTree = SOURCE_ROOT; };
+		000000000000000000000148 /* Sources/RemoteCore/Inflate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/RemoteCore/Inflate.swift; sourceTree = SOURCE_ROOT; };
+		000000000000000000000149 /* Sources/RemoteCore/FramebufferEncoding.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/RemoteCore/FramebufferEncoding.swift; sourceTree = SOURCE_ROOT; };
+		00000000000000000000014A /* Sources/RemoteCore/SessionResume.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/RemoteCore/SessionResume.swift; sourceTree = SOURCE_ROOT; };
+		00000000000000000000014B /* Sources/CInflate/inflate_bridge.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; path = Sources/CInflate/inflate_bridge.c; sourceTree = SOURCE_ROOT; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -55,6 +63,10 @@
 				000000000000000000000065 /* App/ScreenSurface.swift */,
 				000000000000000000000066 /* Sources/RemoteCore/Wire.swift */,
 				000000000000000000000146 /* Sources/RemoteCore/PointerInput.swift */,
+				000000000000000000000148 /* Sources/RemoteCore/Inflate.swift */,
+				000000000000000000000149 /* Sources/RemoteCore/FramebufferEncoding.swift */,
+				00000000000000000000014A /* Sources/RemoteCore/SessionResume.swift */,
+				00000000000000000000014B /* Sources/CInflate/inflate_bridge.c */,
 				000000000000000000000067 /* Sources/RemoteCore/RFBClient.swift */,
 				000000000000000000000003 /* Products */,
 			);
@@ -143,6 +155,10 @@
 				0000000000000000000000C9 /* App/ScreenSurface.swift in Sources */,
 				0000000000000000000000CA /* Sources/RemoteCore/Wire.swift in Sources */,
 				000000000000000000000147 /* Sources/RemoteCore/PointerInput.swift in Sources */,
+				00000000000000000000014C /* Sources/RemoteCore/Inflate.swift in Sources */,
+				00000000000000000000014D /* Sources/RemoteCore/FramebufferEncoding.swift in Sources */,
+				00000000000000000000014E /* Sources/RemoteCore/SessionResume.swift in Sources */,
+				00000000000000000000014F /* Sources/CInflate/inflate_bridge.c in Sources */,
 				0000000000000000000000CB /* Sources/RemoteCore/RFBClient.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -177,8 +193,10 @@
 				CODE_SIGN_STYLE = Automatic;
 				DEVELOPMENT_TEAM = RZUH4T3FCB;
 				INFOPLIST_FILE = App/Info.plist;
+				OTHER_LDFLAGS = "-lz";
 				PRODUCT_BUNDLE_IDENTIFIER = com.ias.specula;
 				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_OBJC_BRIDGING_HEADER = App/MacRemote-Bridging-Header.h;
 				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
 				TARGETED_DEVICE_FAMILY = "1,2";
 			};
@@ -191,8 +209,10 @@
 				CODE_SIGN_STYLE = Automatic;
 				DEVELOPMENT_TEAM = RZUH4T3FCB;
 				INFOPLIST_FILE = App/Info.plist;
+				OTHER_LDFLAGS = "-lz";
 				PRODUCT_BUNDLE_IDENTIFIER = com.ias.specula;
 				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_OBJC_BRIDGING_HEADER = App/MacRemote-Bridging-Header.h;
 				SWIFT_OPTIMIZATION_LEVEL = "-O";
 				TARGETED_DEVICE_FAMILY = "1,2";
 			};

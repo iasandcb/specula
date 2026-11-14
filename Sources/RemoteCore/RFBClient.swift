@@ -13,18 +13,32 @@ public actor RFBClient {
     private var width = 0
     private var height = 0
     private var pixels = Data()
+    private var inflate = InflateStream()
     private let queue = DispatchQueue(label: "MacRemote.RFB")
     public init() {}
+
+    /// Nagle would hold small pointer packets and framebuffer requests for a delayed ACK.
+    static func transportParameters() -> NWParameters {
+        let tcp = NWProtocolTCP.Options()
+        tcp.noDelay = true
+        tcp.enableKeepalive = true
+        tcp.keepaliveIdle = 4
+        tcp.keepaliveInterval = 2
+        tcp.keepaliveCount = 3
+        return NWParameters(tls: nil, tcp: tcp)
+    }
 
     public func close() { connection?.cancel(); connection = nil }
 
     public func run(host: String, port: UInt16, username: String = "", password: String,
                     onProgress: @escaping @Sendable (String) -> Void = { _ in },
                     onFrame: @escaping @Sendable (Frame) -> Void,
-                    onReady: @escaping @Sendable (String) -> Void) async throws {
+                    onReady: @escaping @Sendable (String) -> Void,
+                    onCursor: @escaping @Sendable (RemoteCursor) -> Void = { _ in }) async throws {
         guard connection == nil else { throw RFBError.invalid("이미 연결 중입니다.") }
+        inflate = InflateStream()
         guard let endpointPort = NWEndpoint.Port(rawValue: port) else { throw RFBError.invalid("포트를 확인해 주세요.") }
-        let conn = NWConnection(host: NWEndpoint.Host(host), port: endpointPort, using: .tcp)
+        let conn = NWConnection(host: NWEndpoint.Host(host), port: endpointPort, using: Self.transportParameters())
         connection = conn
         defer { conn.cancel(); connection = nil }
         conn.start(queue: queue)
@@ -87,8 +101,7 @@ public actor RFBClient {
         try allocate()
         // 32 bpp, 24-bit depth, little endian, true colour; R/G/B shifts 0/8/16.
         try await send(Data([0,0,0,0, 32,24,0,1, 0,255,0,255,0,255, 0,8,16, 0,0,0]))
-        // Raw + DesktopSize. Compression comes after input compatibility is established.
-        try await send(Data([2,0,0,2] + Wire.u32(0) + Wire.u32(0xffffff21)))
+        try await send(RFBEncodings.setEncodingsMessage())
         handshakeDeadline.cancel()
         onProgress("첫 화면을 받는 중…")
         onReady(name)
@@ -99,25 +112,19 @@ public actor RFBClient {
             case 0:
                 _ = try await read(1)
                 let count = try await number(2)
-                var resized = false
-                for _ in 0..<count {
-                    let x = try await number(2), y = try await number(2)
-                    let w = try await number(2), h = try await number(2)
-                    let encoding = try await number(4)
-                    if encoding == 0xffffff21 {
-                        width = w; height = h; try allocate(); resized = true
-                    } else if encoding == 0 {
-                        guard w > 0, h > 0, x + w <= width, y + h <= height else { throw RFBError.invalid("화면 데이터의 범위가 잘못되었습니다.") }
-                        var rect = try await read(w * h * 4)
-                        for alpha in stride(from: 3, to: rect.count, by: 4) { rect[alpha] = 255 }
-                        for row in 0..<h {
-                            let start = ((y + row) * width + x) * 4
-                            pixels.replaceSubrange(start..<(start + w * 4), with: rect[(row * w * 4)..<((row + 1) * w * 4)])
-                        }
-                    } else { throw RFBError.invalid("지원하지 않는 화면 압축 방식입니다: \(encoding)") }
-                }
-                onFrame(Frame(width: width, height: height, rgba: pixels))
-                try await request(incremental: !resized)
+                let pending = try await readRectangles(count)
+                let resized = pending.contains { if case .desktop = $0 { return true }; return false }
+                let requestedWidth = pending.reversed().compactMap { item -> Int? in
+                    if case .desktop(let w, _) = item { return w }; return nil
+                }.first ?? width
+                let requestedHeight = pending.reversed().compactMap { item -> Int? in
+                    if case .desktop(_, let h) = item { return h }; return nil
+                }.first ?? height
+                // The next request goes out before inflate or the UI, so the server can capture the following frame immediately.
+                try await request(incremental: !resized, width: requestedWidth, height: requestedHeight)
+                let applied = try apply(pending)
+                if let cursor = applied.cursor { onCursor(cursor) }
+                if applied.pixelsChanged { onFrame(Frame(width: width, height: height, rgba: pixels)) }
             case 2: break // Bell
             case 3:
                 _ = try await read(3)
@@ -127,14 +134,102 @@ public actor RFBClient {
         }
     }
 
+    private enum PendingRect {
+        case desktop(Int, Int)
+        case raw(x: Int, y: Int, w: Int, h: Int, data: Data)
+        case copy(x: Int, y: Int, w: Int, h: Int, fromX: Int, fromY: Int)
+        case zrle(x: Int, y: Int, w: Int, h: Int, data: Data)
+        case cursor(RemoteCursor)
+    }
+
+    private func readRectangles(_ count: Int) async throws -> [PendingRect] {
+        var pending: [PendingRect] = []
+        var index = 0
+        while index < count {
+            index += 1
+            let x = try await number(2), y = try await number(2)
+            let w = try await number(2), h = try await number(2)
+            let encoding = try await number(4)
+            if encoding == RFBEncodings.lastRect { break }
+            switch encoding {
+            case RFBEncodings.desktopSize:
+                guard w > 0, h > 0 else { throw RFBError.invalid("화면 크기가 잘못되었습니다.") }
+                pending.append(.desktop(w, h))
+            case RFBEncodings.cursor:
+                if w == 0 || h == 0 {
+                    pending.append(.cursor(RemoteCursor(width: 0, height: 0, hotspotX: x, hotspotY: y, rgba: Data())))
+                } else {
+                    guard let length = CursorPseudo.payloadLength(width: w, height: h) else { throw RFBError.invalid("커서 크기가 지원 범위를 넘습니다.") }
+                    let payload = try await read(length)
+                    let pixelBytes = w * h * 4
+                    let cursor = try CursorPseudo.decode(width: w, height: h, hotspotX: x, hotspotY: y, pixels: payload.prefix(pixelBytes), mask: payload.suffix(length - pixelBytes))
+                    pending.append(.cursor(cursor))
+                }
+            case RFBEncodings.raw:
+                guard w > 0, h > 0, w <= 8192, h <= 8192 else { throw RFBError.invalid("화면 데이터의 범위가 잘못되었습니다.") }
+                pending.append(.raw(x: x, y: y, w: w, h: h, data: try await read(w * h * 4)))
+            case RFBEncodings.copyRect:
+                let fromX = try await number(2), fromY = try await number(2)
+                pending.append(.copy(x: x, y: y, w: w, h: h, fromX: fromX, fromY: fromY))
+            case RFBEncodings.zrle:
+                let length = try await number(4)
+                guard (1...8_000_000).contains(length) else { throw RFBError.invalid("화면 압축 크기가 잘못되었습니다.") }
+                pending.append(.zrle(x: x, y: y, w: w, h: h, data: try await read(length)))
+            default:
+                throw RFBError.invalid("지원하지 않는 화면 압축 방식입니다: \(encoding)")
+            }
+        }
+        return pending
+    }
+
+    private func apply(_ pending: [PendingRect]) throws -> (pixelsChanged: Bool, cursor: RemoteCursor?) {
+        var pixelsChanged = false
+        var cursor: RemoteCursor?
+        for item in pending {
+            switch item {
+            case .desktop(let w, let h):
+                width = w
+                height = h
+                try allocate()
+                pixelsChanged = true
+            case .raw(let x, let y, let w, let h, var data):
+                guard x + w <= width, y + h <= height else { throw RFBError.invalid("화면 데이터의 범위가 잘못되었습니다.") }
+                for alpha in stride(from: 3, to: data.count, by: 4) { data[alpha] = 255 }
+                try blit(data, x: x, y: y, w: w, h: h)
+                pixelsChanged = true
+            case .copy(let x, let y, let w, let h, let fromX, let fromY):
+                try FramebufferCopy.copy(pixels: &pixels, width: width, height: height, x: x, y: y, w: w, h: h, fromX: fromX, fromY: fromY)
+                pixelsChanged = true
+            case .zrle(let x, let y, let w, let h, let data):
+                guard x + w <= width, y + h <= height else { throw RFBError.invalid("화면 데이터의 범위가 잘못되었습니다.") }
+                let plain = try inflate.inflate(data)
+                let rgba = try ZRLERect.decode(width: w, height: h, uncompressed: plain)
+                try blit(rgba, x: x, y: y, w: w, h: h)
+                pixelsChanged = true
+            case .cursor(let value):
+                cursor = value
+            }
+        }
+        return (pixelsChanged, cursor)
+    }
+
+    private func blit(_ rgba: Data, x: Int, y: Int, w: Int, h: Int) throws {
+        guard rgba.count == w * h * 4 else { throw RFBError.invalid("화면 데이터의 범위가 잘못되었습니다.") }
+        for row in 0..<h {
+            let start = ((y + row) * width + x) * 4
+            let source = row * w * 4
+            pixels.replaceSubrange(start..<(start + w * 4), with: rgba[source..<(source + w * 4)])
+        }
+    }
+
     private func allocate() throws {
         guard width > 0, height > 0, width <= 8192, height <= 8192, width * height <= 16_777_216 else {
             throw RFBError.invalid("지원 가능한 화면 크기를 초과했습니다.")
         }
         pixels = Data(repeating: 0, count: width * height * 4)
     }
-    private func request(incremental: Bool) async throws {
-        try await send(Data([3, incremental ? 1 : 0, 0,0,0,0] + Wire.u16(width) + Wire.u16(height)))
+    private func request(incremental: Bool, width requestedWidth: Int? = nil, height requestedHeight: Int? = nil) async throws {
+        try await send(Data([3, incremental ? 1 : 0, 0,0,0,0] + Wire.u16(requestedWidth ?? width) + Wire.u16(requestedHeight ?? height)))
     }
     public func key(_ symbol: UInt32, down: Bool) async throws { try await send(Wire.key(symbol, down: down)) }
     public func pointer(x: Int, y: Int, buttons: UInt8) async throws {

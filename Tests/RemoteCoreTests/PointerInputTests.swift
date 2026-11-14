@@ -82,4 +82,48 @@ final class PointerInputTests: XCTestCase {
         XCTAssertNil(PointerMapping.framebufferPoint(viewX: 1, viewY: 1, viewWidth: 0, viewHeight: 10, imageWidth: 10, imageHeight: 10, fill: false, clamp: true))
         XCTAssertNil(PointerMapping.displayedFrame(viewWidth: 10, viewHeight: 10, imageWidth: 0, imageHeight: 10, fill: false))
     }
+
+    func testPointerMotionCollapsesAndButtonsStayImmediate() {
+        var coalescer = PointerCoalescer()
+        let first = coalescer.submit(.init(x: 0, y: 0, buttons: 0), nowMs: 0)
+        XCTAssertEqual(first.send, [.init(x: 0, y: 0, buttons: 0)])
+        let moved = coalescer.submit(.init(x: 4, y: 1, buttons: 0), nowMs: 5)
+        XCTAssertEqual(moved.send, [])
+        XCTAssertEqual(moved.flushAfterMs, 11)
+        let replaced = coalescer.submit(.init(x: 9, y: 2, buttons: 0), nowMs: 8)
+        XCTAssertEqual(replaced.send, [])
+        let early = coalescer.flush(nowMs: 10)
+        XCTAssertEqual(early.send, [])
+        let flushed = coalescer.flush(nowMs: 16)
+        XCTAssertEqual(flushed.send, [.init(x: 9, y: 2, buttons: 0)])
+
+        let down = coalescer.submit(.init(x: 9, y: 2, buttons: PointerButtons.left), nowMs: 17)
+        XCTAssertEqual(down.send, [.init(x: 9, y: 2, buttons: PointerButtons.left)])
+        let up = coalescer.submit(.init(x: 9, y: 2, buttons: 0), nowMs: 17)
+        XCTAssertEqual(up.send, [.init(x: 9, y: 2, buttons: 0)])
+
+        var wheel = PointerCoalescer()
+        var sent: [PointerCoalescer.Sample] = []
+        for mask in [PointerButtons.wheelUp, PointerButtons.none, PointerButtons.wheelDown, PointerButtons.none] {
+            sent.append(contentsOf: wheel.submit(.init(x: 3, y: 4, buttons: mask), nowMs: 0).send)
+        }
+        XCTAssertEqual(sent.map(\.buttons), [PointerButtons.wheelUp, PointerButtons.none, PointerButtons.wheelDown, PointerButtons.none])
+    }
+
+    func testCursorGlyphNeverStacksAndTinyCursorsGrowWithoutMovingTheHotspot() {
+        XCTAssertEqual(PointerGlyph.choose(pointerInUse: false, hasServerCursor: true, serverHidCursor: false), .hidden)
+        XCTAssertEqual(PointerGlyph.choose(pointerInUse: true, hasServerCursor: false, serverHidCursor: false), .localArrow)
+        XCTAssertEqual(PointerGlyph.choose(pointerInUse: true, hasServerCursor: true, serverHidCursor: false), .server)
+        XCTAssertEqual(PointerGlyph.choose(pointerInUse: true, hasServerCursor: false, serverHidCursor: true), .hidden)
+        XCTAssertEqual(PointerGlyph.choose(pointerInUse: true, hasServerCursor: true, serverHidCursor: true), .hidden)
+
+        let grown = CursorLayout.frame(pointerX: 100, pointerY: 80, hotspotX: 1, hotspotY: 2, cursorWidth: 16, cursorHeight: 16, pointScale: 0.5)
+        XCTAssertEqual(grown?.height, 22)
+        XCTAssertEqual(grown?.width, 22)
+        XCTAssertEqual(grown?.x, 100 - 22 / 16)
+        XCTAssertEqual(grown?.y, 80 - 2 * 22 / 16)
+        let natural = CursorLayout.frame(pointerX: 10, pointerY: 10, hotspotX: 0, hotspotY: 0, cursorWidth: 32, cursorHeight: 32, pointScale: 2)
+        XCTAssertEqual(natural, CursorLayout(x: 10, y: 10, width: 64, height: 64))
+        XCTAssertNil(CursorLayout.frame(pointerX: 0, pointerY: 0, hotspotX: 0, hotspotY: 0, cursorWidth: 0, cursorHeight: 8, pointScale: 1))
+    }
 }

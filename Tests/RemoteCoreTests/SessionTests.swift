@@ -1,19 +1,28 @@
 import XCTest
 import Network
 import BigInt
+#if canImport(CryptoKit)
 import CryptoKit
+#endif
+#if canImport(CommonCrypto)
 import CommonCrypto
+#else
+import CCryptoShim
+#endif
 @testable import RemoteCore
 
 final class SessionTests: XCTestCase {
     func testFragmentedHandshakeAuthenticationAndFramebuffer() async throws { try await session(account: false) }
     func testMacAccountLoginReachesFramebuffer() async throws { try await session(account: true) }
+    func testZRLEAndCursorRectanglesUpdateTheFrameWithoutRawPixels() async throws { try await session(account: false, compressed: true) }
 
-    private func session(account: Bool) async throws {
+    private func session(account: Bool, compressed: Bool = false) async throws {
         let listener = try NWListener(using: .tcp, on: .any)
         let serverFinished = expectation(description: "server verified client handshake")
         let receivedFrame = expectation(description: "client decoded frame")
         let ready = expectation(description: "client initialized")
+        let receivedCursor = expectation(description: "client decoded cursor")
+        if !compressed { receivedCursor.fulfill() }
         let queue = DispatchQueue(label: "test.rfb")
         listener.newConnectionHandler = { connection in
             connection.start(queue: queue)
@@ -43,12 +52,23 @@ final class SessionTests: XCTestCase {
                     try await self.send(connection, Data([0,2,0,1] + format + [0,0,0,4] + Array("Test".utf8)))
                     let pixelFormat = try await self.read(connection, 20)
                     XCTAssertEqual(pixelFormat, Data([0,0,0,0] + format))
-                    let encodings = try await self.read(connection, 12)
-                    XCTAssertEqual(encodings, Data([2,0,0,2,0,0,0,0,255,255,255,33]))
+                    let expectedEncodings = RFBEncodings.setEncodingsMessage()
+                    let encodings = try await self.read(connection, expectedEncodings.count)
+                    XCTAssertEqual(encodings, expectedEncodings)
                     let updateRequest = try await self.read(connection, 10)
                     XCTAssertEqual(updateRequest, Data([3,0,0,0,0,0,0,2,0,1]))
-                    // A 2×1 raw rectangle: red, green. Padding must become opaque alpha.
-                    try await self.send(connection, Data([0,0,0,1, 0,0,0,0,0,2,0,1,0,0,0,0, 255,0,0,0,0,255,0,0]))
+                    if compressed {
+                        // Cursor (hotspot 0,0) then a 2×1 ZRLE tile: red, green. Not drawn as raw pixels.
+                        let zrle = Data([0x78,0x9c,0x62,0xf8,0xcf,0xc0,0xc0,0xf0,0x9f,0x01,0x00,0x00,0x00,0xff,0xff])
+                        var message = Data([0,0,0,2, 0,0,0,0, 0,1,0,1, 255,255,255,17, 9,8,7,0, 0x80])
+                        message.append(contentsOf: [0,0,0,0, 0,2,0,1, 0,0,0,16])
+                        message.append(contentsOf: [0,0,0,UInt8(zrle.count)])
+                        message.append(zrle)
+                        try await self.send(connection, message)
+                    } else {
+                        // A 2×1 raw rectangle: red, green. Padding must become opaque alpha.
+                        try await self.send(connection, Data([0,0,0,1, 0,0,0,0,0,2,0,1,0,0,0,0, 255,0,0,0,0,255,0,0]))
+                    }
                     let incrementalRequest = try await self.read(connection, 10)
                     XCTAssertEqual(incrementalRequest, Data([3,1,0,0,0,0,0,2,0,1]))
                 } catch { XCTFail("Mock server failed: \(error)") }
@@ -76,9 +96,13 @@ final class SessionTests: XCTestCase {
                 receivedFrame.fulfill()
             }, onReady: { name in
                 XCTAssertEqual(name, "Test"); ready.fulfill()
+            }, onCursor: { cursor in
+                XCTAssertEqual(cursor.width, 1)
+                XCTAssertEqual(Array(cursor.rgba), [9, 8, 7, 255])
+                receivedCursor.fulfill()
             })
         }
-        await fulfillment(of: [ready, receivedFrame, serverFinished], timeout: 15)
+        await fulfillment(of: [ready, receivedFrame, receivedCursor, serverFinished], timeout: 15)
         await client.close(); task.cancel(); await task.value
     }
     private func verifyAccountResponse(_ response: Data) throws {

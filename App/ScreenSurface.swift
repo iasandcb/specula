@@ -5,11 +5,21 @@ struct ScreenSurface: UIViewRepresentable {
     var enabled: Bool
     var fill: Bool = false
     var optionHeld: Bool = false
+    var suspendKeyCapture = false
+    var cursor: RemoteCursor?
+    var cursorHidden = false
     var key: (UInt32, Bool) -> Void
     var pointer: (CGPoint, UInt8) -> Void
     func makeUIView(context: Context) -> RemoteCanvas { RemoteCanvas() }
     func updateUIView(_ view: RemoteCanvas, context: Context) {
-        view.remoteOptionHeld = optionHeld; view.fill = fill; view.image = image; view.key = key; view.pointer = pointer
+        view.remoteOptionHeld = optionHeld
+        view.fill = fill
+        view.image = image
+        view.key = key
+        view.pointer = pointer
+        view.suspendKeyCapture = suspendKeyCapture
+        if view.serverCursor != cursor { view.serverCursor = cursor }
+        if view.serverCursorHidden != cursorHidden { view.serverCursorHidden = cursorHidden }
         view.isUserInteractionEnabled = enabled
         // Frame updates must not steal first responder from a sheet, alert, or text field.
         view.setKeyCaptureEnabled(enabled)
@@ -19,9 +29,12 @@ struct ScreenSurface: UIViewRepresentable {
 final class RemoteCanvas: UIView, UIGestureRecognizerDelegate, UIPointerInteractionDelegate {
     var remoteOptionHeld = false
     var fill = false { didSet { setNeedsDisplay() } }
-    var image: UIImage? { didSet { setNeedsDisplay() } }
+    var image: UIImage? { didSet { setNeedsDisplay(); updateCursorLayer() } }
     var key: ((UInt32, Bool) -> Void)?
     var pointer: ((CGPoint, UInt8) -> Void)?
+    var suspendKeyCapture = false
+    var serverCursor: RemoteCursor? { didSet { cachedServerCursor = nil; updateCursorLayer() } }
+    var serverCursorHidden = false { didSet { updateCursorLayer() } }
     private var held: [Int: UInt32] = [:]
     private var scrollOrigin: CGFloat = 0
     private var keyCaptureEnabled = false
@@ -35,6 +48,13 @@ final class RemoteCanvas: UIView, UIGestureRecognizerDelegate, UIPointerInteract
     private var lastPoint: CGPoint?
     private var suppressPointerTap = false
     private var suppressGeneration = 0
+    private var coalescer = PointerCoalescer()
+    private var flushTicket = 0
+    private var pointerActive = false
+    private var pointerLocation: CGPoint?
+    private let cursorLayer = CALayer()
+    private var cachedServerCursor: (RemoteCursor, CGImage)?
+    private static let localArrow = LocalArrow.make()
     // Cached so UIKit can ask during a responder transition without walking the chain.
     override var canBecomeFirstResponder: Bool { allowKeyCapture }
     /// Finger and Pencil stay on the original gestures. Pointer clicks are a different touch type
@@ -59,7 +79,7 @@ final class RemoteCanvas: UIView, UIGestureRecognizerDelegate, UIPointerInteract
         armKeyCaptureFollowUp()
     }
     private func capture() -> KeyboardCapture {
-        let presented = interfacePresented
+        let presented = suspendKeyCapture || interfacePresented
         let textFocused = !presented && !isFirstResponder && Self.hasFocusedTextInput(window)
         return KeyboardCapture(enabled: keyCaptureEnabled && window != nil, interfacePresented: presented, textInputFocused: textFocused, isFirstResponder: isFirstResponder)
     }
@@ -111,6 +131,9 @@ final class RemoteCanvas: UIView, UIGestureRecognizerDelegate, UIPointerInteract
         clipsToBounds = true
         installTouchGestures()
         installPointerGestures()
+        cursorLayer.contentsGravity = .resize
+        cursorLayer.isHidden = true
+        layer.addSublayer(cursorLayer)
         addInteraction(UIPointerInteraction(delegate: self))
         isAccessibilityElement = true
         accessibilityLabel = "맥 화면. 탭으로 클릭, 길게 눌러 우클릭, 한 손가락으로 드래그, 두 손가락으로 스크롤. 마우스나 트랙패드로 포인터를 움직이고 클릭하고 스크롤"
@@ -174,6 +197,10 @@ final class RemoteCanvas: UIView, UIGestureRecognizerDelegate, UIPointerInteract
         return CGRect(x: CGFloat(frame.x), y: CGFloat(frame.y), width: CGFloat(frame.width), height: CGFloat(frame.height))
     }
     override func draw(_ rect: CGRect) { image?.draw(in: imageRect) }
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        updateCursorLayer()
+    }
     private func framebufferPoint(_ viewPoint: CGPoint, clamp: Bool) -> CGPoint? {
         guard let image,
               let point = PointerMapping.framebufferPoint(viewX: Double(viewPoint.x), viewY: Double(viewPoint.y), viewWidth: Double(bounds.width), viewHeight: Double(bounds.height), imageWidth: Double(image.size.width), imageHeight: Double(image.size.height), fill: fill, clamp: clamp)
@@ -194,15 +221,15 @@ final class RemoteCanvas: UIView, UIGestureRecognizerDelegate, UIPointerInteract
     }
     @objc private func drag(_ gesture: UIPanGestureRecognizer) {
         guard let point = remote(gesture) else { return }
-        pointer?(point, gesture.state == .began || gesture.state == .changed ? PointerButtons.left : PointerButtons.none)
+        emit(point, gesture.state == .began || gesture.state == .changed ? PointerButtons.left : PointerButtons.none)
     }
     @objc private func scroll(_ gesture: UIPanGestureRecognizer) {
         if gesture.state == .began { scrollOrigin = 0 }
         guard let point = remote(gesture) else { return }
         let distance = gesture.translation(in: self).y - scrollOrigin
         if abs(distance) > 16 {
-            pointer?(point, distance > 0 ? PointerButtons.wheelUp : PointerButtons.wheelDown)
-            pointer?(point, PointerButtons.none)
+            emit(point, distance > 0 ? PointerButtons.wheelUp : PointerButtons.wheelDown)
+            emit(point, PointerButtons.none)
             scrollOrigin = gesture.translation(in: self).y
         }
     }
@@ -214,13 +241,21 @@ final class RemoteCanvas: UIView, UIGestureRecognizerDelegate, UIPointerInteract
         return PointerButtons.mask(uiButtonMask: raw)
     }
     @objc private func hover(_ gesture: UIHoverGestureRecognizer) {
-        guard gesture.state == .began || gesture.state == .changed, heldButtons == 0 else { return }
-        guard let point = framebufferPoint(gesture.location(in: self), clamp: false) else { return }
-        emit(point, PointerButtons.none)
+        switch gesture.state {
+        case .began, .changed:
+            notePointer(gesture.location(in: self), active: true)
+            guard heldButtons == 0, let point = framebufferPoint(gesture.location(in: self), clamp: false) else { return }
+            emit(point, PointerButtons.none)
+        case .ended, .cancelled, .failed:
+            if heldButtons == 0 { notePointer(gesture.location(in: self), active: false) }
+        default:
+            break
+        }
     }
     @objc private func pointerPress(_ gesture: PointerPressRecognizer) {
         switch gesture.state {
         case .began, .changed:
+            notePointer(gesture.location(in: self), active: true)
             guard let point = remote(gesture) else { return }
             claimPointerClick()
             gesture.deliveredDown = true
@@ -252,6 +287,7 @@ final class RemoteCanvas: UIView, UIGestureRecognizerDelegate, UIPointerInteract
     }
     @objc private func wheel(_ gesture: UIPanGestureRecognizer) {
         guard gesture.state == .began || gesture.state == .changed || gesture.state == .ended || gesture.state == .cancelled else { return }
+        if gesture.state != .cancelled { notePointer(gesture.location(in: self), active: true) }
         if gesture.state == .began {
             wheelPendingX = 0
             wheelPendingY = 0
@@ -274,7 +310,66 @@ final class RemoteCanvas: UIView, UIGestureRecognizerDelegate, UIPointerInteract
     }
     private func emit(_ point: CGPoint, _ buttons: UInt8) {
         lastPoint = point
-        pointer?(point, buttons)
+        let sample = PointerCoalescer.Sample(x: Int(point.x), y: Int(point.y), buttons: buttons)
+        deliver(coalescer.submit(sample, nowMs: Self.milliseconds()))
+    }
+    private func deliver(_ result: PointerCoalescer.Result) {
+        for sample in result.send { pointer?(CGPoint(x: sample.x, y: sample.y), sample.buttons) }
+        guard let delay = result.flushAfterMs else { return }
+        flushTicket += 1
+        let ticket = flushTicket
+        DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(max(delay, 1))) { [weak self] in
+            guard let self, self.flushTicket == ticket else { return }
+            self.deliver(self.coalescer.flush(nowMs: Self.milliseconds()))
+        }
+    }
+    private static func milliseconds() -> Int { Int(Date().timeIntervalSinceReferenceDate * 1000) }
+    private func notePointer(_ location: CGPoint, active: Bool) {
+        pointerLocation = location
+        pointerActive = active
+        updateCursorLayer()
+    }
+    private var pointsPerPixel: Double {
+        guard let image, image.size.width > 0 else { return 1 }
+        let rect = imageRect
+        guard rect.width > 0 else { return 1 }
+        return Double(rect.width / image.size.width)
+    }
+    private func updateCursorLayer() {
+        let glyph = PointerGlyph.choose(pointerInUse: pointerActive, hasServerCursor: serverCursor?.isHidden == false, serverHidCursor: serverCursorHidden)
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        defer { CATransaction.commit() }
+        guard let location = pointerLocation else { cursorLayer.isHidden = true; return }
+        switch glyph {
+        case .hidden:
+            cursorLayer.isHidden = true
+        case .localArrow:
+            let arrow = Self.localArrow
+            cursorLayer.isHidden = false
+            cursorLayer.contents = arrow.image
+            cursorLayer.contentsScale = arrow.scale
+            cursorLayer.magnificationFilter = .linear
+            cursorLayer.frame = CGRect(x: location.x - arrow.hotspot.x, y: location.y - arrow.hotspot.y, width: arrow.size.width, height: arrow.size.height)
+        case .server:
+            guard let cursor = serverCursor, !cursor.isHidden, let cg = serverImage(cursor),
+                  let layout = CursorLayout.frame(pointerX: Double(location.x), pointerY: Double(location.y), hotspotX: cursor.hotspotX, hotspotY: cursor.hotspotY, cursorWidth: cursor.width, cursorHeight: cursor.height, pointScale: pointsPerPixel) else {
+                cursorLayer.isHidden = true
+                return
+            }
+            cursorLayer.isHidden = false
+            cursorLayer.contents = cg
+            cursorLayer.contentsScale = 1
+            cursorLayer.magnificationFilter = .nearest
+            cursorLayer.frame = CGRect(x: layout.x, y: layout.y, width: layout.width, height: layout.height)
+        }
+    }
+    private func serverImage(_ cursor: RemoteCursor) -> CGImage? {
+        if let cached = cachedServerCursor, cached.0 == cursor { return cached.1 }
+        guard let provider = CGDataProvider(data: cursor.rgba as CFData),
+              let image = CGImage(width: cursor.width, height: cursor.height, bitsPerComponent: 8, bitsPerPixel: 32, bytesPerRow: cursor.width * 4, space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.last.rawValue), provider: provider, decode: nil, shouldInterpolate: false, intent: .defaultIntent) else { return nil }
+        cachedServerCursor = (cursor, image)
+        return image
     }
     private func click(_ point: CGPoint, button: UInt8) {
         for mask in PointerButtons.click(button) { emit(point, mask) }
@@ -331,6 +426,36 @@ final class RemoteCanvas: UIView, UIGestureRecognizerDelegate, UIPointerInteract
     override func resignFirstResponder() -> Bool {
         held.values.forEach { key?($0, false) }; held.removeAll()
         return super.resignFirstResponder()
+    }
+}
+
+private enum LocalArrow {
+    static func make() -> (image: CGImage, scale: CGFloat, size: CGSize, hotspot: CGPoint) {
+        let format = UIGraphicsImageRendererFormat()
+        format.opaque = false
+        let size = CGSize(width: 28, height: 36)
+        let renderer = UIGraphicsImageRenderer(size: size, format: format)
+        let image = renderer.image { context in
+            let path = UIBezierPath()
+            path.move(to: CGPoint(x: 3, y: 2))
+            path.addLine(to: CGPoint(x: 3, y: 24))
+            path.addLine(to: CGPoint(x: 8.2, y: 18.8))
+            path.addLine(to: CGPoint(x: 12.4, y: 29))
+            path.addLine(to: CGPoint(x: 16.6, y: 27.2))
+            path.addLine(to: CGPoint(x: 12.2, y: 17))
+            path.addLine(to: CGPoint(x: 19.2, y: 16.8))
+            path.close()
+            context.cgContext.setShadow(offset: CGSize(width: 0, height: 1), blur: 2, color: UIColor.black.withAlphaComponent(0.7).cgColor)
+            UIColor.white.setStroke()
+            path.lineWidth = 3.5
+            path.lineJoinStyle = .round
+            path.lineCapStyle = .round
+            path.stroke()
+            context.cgContext.setShadow(offset: .zero, blur: 0, color: nil)
+            UIColor.black.setFill()
+            path.fill()
+        }
+        return (image.cgImage!, image.scale, image.size, CGPoint(x: 3, y: 2))
     }
 }
 

@@ -7,6 +7,7 @@ final class DisplayController: ObservableObject {
     @Published var error = ""
     @Published var busy = false
     @Published var paired = false
+    private var preferredModeID: UInt32?
     private var host = ""
     private var token: String?
     private var heartbeat: Task<Void, Never>?
@@ -25,6 +26,7 @@ final class DisplayController: ObservableObject {
     func beginSession() { active = true; startHeartbeat() }
     func endSession() {
         active = false; heartbeat?.cancel(); heartbeat = nil
+        preferredModeID = nil
         guard token != nil else { return }
         let host = self.host, token = self.token
         Task { try? await request(path: "/restore", body: Data("{}".utf8), host: host, token: token) }
@@ -64,12 +66,18 @@ final class DisplayController: ObservableObject {
         await perform {
             let data = try await self.request(path: "/mode", body: JSONEncoder().encode(ChangeDisplayRequest(modeID: id)))
             self.snapshot = try JSONDecoder().decode(DisplaySnapshot.self, from: data)
+            self.preferredModeID = id
         }
+    }
+    func reapplyPreferredMode() async {
+        guard let mode = DisplayReconnect.mode(reconnecting: true, selected: preferredModeID) else { return }
+        await change(mode)
     }
     func restore() async {
         await perform {
             let data = try await self.request(path: "/restore", body: Data("{}".utf8))
             self.snapshot = try JSONDecoder().decode(DisplaySnapshot.self, from: data)
+            self.preferredModeID = nil
         }
     }
     func resetPairing() { token = nil; paired = false; heartbeat?.cancel(); snapshot = nil }
@@ -116,6 +124,7 @@ final class DisplayController: ObservableObject {
 struct DisplaySettingsView: View {
     @ObservedObject var controller: DisplayController
     @State private var code = ""
+    @FocusState private var codeFocused: Bool
     @Environment(\.dismiss) private var dismiss
     var body: some View {
         NavigationStack {
@@ -123,8 +132,27 @@ struct DisplaySettingsView: View {
                 if !controller.paired {
                     Section("맥 보조 앱 연결") {
                         Text("맥에서 ‘Specula Display’를 실행한 뒤 표시된 6자리 코드를 입력하세요.")
-                        TextField("6자리 연결 코드", text: $code).keyboardType(.numberPad).textContentType(.oneTimeCode)
-                        Button("연결") { Task { await controller.pair(code: code); code = "" } }
+                        TextField("6자리 연결 코드", text: $code)
+                            .keyboardType(.numbersAndPunctuation)
+                            .textContentType(.oneTimeCode)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
+                            .focused($codeFocused)
+                            .submitLabel(.go)
+                            .onSubmit(submitCode)
+                            .onChange(of: code) { _, value in
+                                let digits = String(value.filter(\.isNumber).prefix(6))
+                                if digits != value { code = digits }
+                            }
+                            .task {
+                                // The remote canvas resigns when this sheet is presented. Retry until that handoff finishes.
+                                for delay in [UInt64(0), 50, 250, 700] {
+                                    if delay > 0 { try? await Task.sleep(nanoseconds: delay * 1_000_000) }
+                                    if Task.isCancelled { return }
+                                    codeFocused = true
+                                }
+                            }
+                        Button("연결", action: submitCode)
                             .disabled(code.count != 6 || controller.busy)
                     }
                 } else {
@@ -161,5 +189,11 @@ struct DisplaySettingsView: View {
             .toolbar { Button("완료") { dismiss() } }
             .task { if controller.paired { await controller.refresh() } }
         }
+    }
+    private func submitCode() {
+        guard code.count == 6, !controller.busy else { return }
+        let entered = code
+        code = ""
+        Task { await controller.pair(code: entered) }
     }
 }
