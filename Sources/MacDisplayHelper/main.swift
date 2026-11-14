@@ -95,21 +95,16 @@ final class DisplayHelper: NSObject, NSApplicationDelegate {
     }
     private func showMessage(_ text: String) { NSLog("Specula Display: %@", text); let alert = NSAlert(); alert.messageText = text; alert.runModal() }
     private func modes() -> [CGDisplayMode] {
+        // Low-resolution duplicates (640×480, 720×450, non-HiDPI 1280×800, …) stay in the list.
         (CGDisplayCopyAllDisplayModes(CGMainDisplayID(), [kCGDisplayShowDuplicateLowResolutionModes: true] as CFDictionary) as? [CGDisplayMode] ?? [])
-            .filter { $0.isUsableForDesktopGUI() && $0.width >= 800 && $0.pixelWidth * $0.pixelHeight <= 6016 * 3384 }
+            .filter { $0.isUsableForDesktopGUI() && DisplayModes.fits(info($0)) }
     }
     private func info(_ mode: CGDisplayMode) -> RemoteDisplayMode {
         RemoteDisplayMode(id: UInt32(bitPattern: mode.ioDisplayModeID), width: mode.width, height: mode.height, pixelWidth: mode.pixelWidth, pixelHeight: mode.pixelHeight)
     }
     private func snapshot() throws -> DisplaySnapshot {
         guard let current = CGDisplayCopyDisplayMode(CGMainDisplayID()) else { throw HelperError.message("현재 화면 정보를 읽지 못했습니다.") }
-        var seen = Set<String>()
-        let choices = modes().sorted { a,b in
-            if a.width != b.width { return a.width < b.width }
-            if a.height != b.height { return a.height < b.height }
-            return a.pixelWidth < b.pixelWidth
-        }.filter { seen.insert("\($0.width)x\($0.height)x\($0.pixelWidth)x\($0.pixelHeight)").inserted }
-        return DisplaySnapshot(current: info(current), modes: choices.map(info))
+        return DisplaySnapshot(current: info(current), modes: DisplayModes.offered(modes().map(info)))
     }
     private func change(_ id: UInt32) throws -> DisplaySnapshot {
         let display = CGMainDisplayID()
