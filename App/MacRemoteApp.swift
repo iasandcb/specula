@@ -409,20 +409,19 @@ struct RemoteView: View {
             Text(rotationAlertText)
         }
     }
-    /// One stable row. ViewThatFits kept remeasuring this bar while the resolution sheet changed the proposal and never finished layout.
+    /// One stable row. Do not swap layouts from the offered width; that loop froze the resolution sheet.
     private var sessionControls: some View {
-        HStack(spacing: 8) {
-            keyboardControl.fixedSize(horizontal: true, vertical: false)
+        HStack(spacing: CGFloat(SessionControls.buttonSpacing)) {
+            keyboardControl
             controlButton(SessionControls.input, label: "입력기 전환", action: switchInput)
-            Spacer(minLength: 4)
+            Spacer(minLength: CGFloat(SessionControls.buttonSpacing))
             controlButton(SessionControls.resolution, label: "해상도") {
                 session.display.cancelPendingRotation()
                 displaySettings = true
             }
             controlButton(SessionControls.orientation(macIsPortrait: session.display.portrait), label: session.display.portrait ? "가로 모드" : "세로 모드", action: togglePortrait)
         }
-        .font(.caption)
-        .padding(.horizontal, 12)
+        .padding(.horizontal, CGFloat(SessionControls.horizontalInset))
         .padding(.vertical, 4)
     }
     private var keyboardControl: some View {
@@ -431,7 +430,13 @@ struct RemoteView: View {
     }
     private func controlButton(_ title: String, label: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            Text(title).lineLimit(1).minimumScaleFactor(0.5)
+            Text(title)
+                .font(.system(size: CGFloat(SessionControls.labelPointSize)))
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+                .padding(.horizontal, CGFloat(SessionControls.labelPadding))
+                .frame(minWidth: CGFloat(SessionControls.minimumHit), minHeight: CGFloat(SessionControls.minimumHit))
+                .contentShape(Rectangle())
         }
         .buttonStyle(.borderless)
         .accessibilityLabel(label)
