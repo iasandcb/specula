@@ -47,6 +47,29 @@ final class DisplayLeaseTests: XCTestCase {
         XCTAssertTrue(DisplayModes.fits(RemoteDisplayMode(id: 9, width: 6016, height: 3384, pixelWidth: 6016, pixelHeight: 3384)))
         XCTAssertFalse(DisplayModes.fits(RemoteDisplayMode(id: 10, width: 8192, height: 8192, pixelWidth: 8192, pixelHeight: 8192)))
     }
+    func testRotationProbeOptionsMatchFramebufferQuadrants() throws {
+        XCTAssertEqual(DisplayRotationAngle.probeOptions(degrees: 0), 0x400)
+        XCTAssertEqual(DisplayRotationAngle.probeOptions(degrees: 90), 0x480)
+        XCTAssertEqual(DisplayRotationAngle.probeOptions(degrees: 180), 0x500)
+        XCTAssertEqual(DisplayRotationAngle.probeOptions(degrees: 270), 0x580)
+        XCTAssertEqual(DisplayRotationAngle.probeOptions(degrees: 360), 0x400)
+        XCTAssertEqual(DisplayRotationAngle.probeOptions(degrees: -90), 0x580)
+        XCTAssertNil(DisplayRotationAngle.probeOptions(degrees: 45))
+        XCTAssertEqual(DisplayRotationAngle.portraitToggle(from: 0), 90)
+        XCTAssertEqual(DisplayRotationAngle.portraitToggle(from: 90), 0)
+        XCTAssertEqual(DisplayRotationAngle.portraitToggle(from: 180), 0)
+        let encoded = try JSONEncoder().encode(DisplayRotation(degrees: 90, supported: false))
+        let decoded = try JSONDecoder().decode(DisplayRotation.self, from: encoded)
+        XCTAssertEqual(decoded, DisplayRotation(degrees: 90, supported: false))
+        let request = try JSONDecoder().decode(SetDisplayRotation.self, from: Data(#"{"degrees":270}"#.utf8))
+        XCTAssertEqual(request.degrees, 270)
+    }
+    func testPortraitFramebufferStaysTallInTheView() {
+        let frame = PointerMapping.displayedFrame(viewWidth: 800, viewHeight: 400, imageWidth: 1080, imageHeight: 1920, fill: false)
+        XCTAssertEqual(frame?.height ?? 0, 400, accuracy: 0.01)
+        XCTAssertLessThan(frame?.width ?? 0, frame?.height ?? 0)
+        XCTAssertTrue(FrameLimits.contains(width: 1080, height: 1920))
+    }
     func testResolutionReturnsOnlyOnAutomaticReconnect() {
         XCTAssertEqual(DisplayReconnect.mode(reconnecting: true, selected: 42), 42)
         XCTAssertNil(DisplayReconnect.mode(reconnecting: false, selected: 42))

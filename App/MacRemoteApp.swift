@@ -1,3 +1,4 @@
+import Combine
 import SwiftUI
 
 @main
@@ -18,6 +19,12 @@ final class Session: ObservableObject {
     @Published var remoteCursor: RemoteCursor?
     @Published var serverCursorHidden = false
     let display = DisplayController()
+    private var displayChanges: AnyCancellable?
+    init() {
+        displayChanges = display.objectWillChange.sink { [weak self] _ in
+            self?.objectWillChange.send()
+        }
+    }
     private var client: RFBClient?
     private var task: Task<Void, Never>?
     private var input: Task<Void, Never>?
@@ -289,6 +296,7 @@ struct RemoteView: View {
                         Menu {
                             Button(session.optionHeld ? "⌥ Option 끄기" : "⌥ Option 켜기") { session.toggleOption() }
                             Button("맥 해상도") { displaySettings = true }
+                            Button(session.display.portrait ? "가로 모드" : "세로 모드", action: togglePortrait)
                             Button(fillScreen ? "전체 화면 보기" : "화면 채우기") { fillScreen.toggle() }
                             Button("입력기 전환") {
                                 session.key(0xffe3, down: true); session.stroke(32); session.key(0xffe3, down: false)
@@ -371,6 +379,7 @@ struct RemoteView: View {
                             }
                             Spacer()
                             Button("해상도") { displaySettings = true }
+                            Button(session.display.portrait ? "가로 모드" : "세로 모드", action: togglePortrait)
                             Button(keyboard ? "키보드 숨기기" : "키보드 표시") { keyboard.toggle() }
                         }.font(.caption).padding(.horizontal)
                         if keyboard { TestKeyboard(session: session) }
@@ -393,6 +402,12 @@ struct RemoteView: View {
             Button("확인", role: .cancel) {}
         } message: {
             Text(session.connectionError)
+        }
+    }
+    private func togglePortrait() {
+        Task {
+            await session.display.togglePortrait()
+            if !session.display.error.isEmpty { displaySettings = true }
         }
     }
     private func submitConnection(from field: ConnectFocus) {

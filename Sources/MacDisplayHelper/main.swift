@@ -2,6 +2,7 @@
 import AppKit
 import CoreGraphics
 import Darwin
+import IOKit
 import Security
 import DisplaySupport
 
@@ -19,6 +20,8 @@ final class DisplayHelper: NSObject, NSApplicationDelegate {
     private var lease = DisplayLease()
     private var original: CGDisplayMode?
     private var originalDisplay: CGDirectDisplayID?
+    private var originalRotation: Int?
+    private var commandedRotation: Int?
     private var timer: Timer?
     private var address = ""
 
@@ -118,9 +121,29 @@ final class DisplayHelper: NSObject, NSApplicationDelegate {
         return try snapshot()
     }
     private func restore() throws {
-        guard let original, let display = originalDisplay else { return }
+        if let originalRotation {
+            _ = MainDisplayProbe.apply(degrees: originalRotation)
+            commandedRotation = originalRotation
+            self.originalRotation = nil
+        }
+        guard let original, let display = originalDisplay else { lease.clear(); return }
         guard CGDisplaySetDisplayMode(display, original, nil) == .success else { throw HelperError.message("원래 해상도를 복원하지 못했습니다. 맥 디스플레이 설정에서 확인해 주세요.") }
         self.original = nil; originalDisplay = nil; lease.clear()
+    }
+    private func rotationState() -> DisplayRotation {
+        let display = CGMainDisplayID()
+        let degrees = MainDisplayProbe.sensedDegrees(display) ?? commandedRotation ?? 0
+        return DisplayRotation(degrees: degrees, supported: MainDisplayProbe.framebuffer(for: display) != nil)
+    }
+    private func setRotation(_ degrees: Int) throws -> DisplayRotation {
+        guard let angle = DisplayRotationAngle.normalized(degrees) else { throw HelperError.message("회전 각도는 0, 90, 180, 270만 사용할 수 있습니다.") }
+        let display = CGMainDisplayID()
+        let before = MainDisplayProbe.sensedDegrees(display) ?? commandedRotation ?? 0
+        let applied = MainDisplayProbe.apply(degrees: angle, display: display)
+        guard applied.supported else { return applied }
+        if originalRotation == nil, applied.degrees != before { originalRotation = before }
+        commandedRotation = applied.degrees
+        return applied
     }
     @objc private func restoreAction() { do { try restore() } catch { showMessage(error.localizedDescription) } }
     @objc private func quit() { do { try restore(); NSApp.terminate(nil) } catch { showMessage(error.localizedDescription) } }
@@ -147,6 +170,10 @@ final class DisplayHelper: NSObject, NSApplicationDelegate {
                 lease.renew(now: Date()); reply(connection, value: ["ok": true])
             case ("POST", "/restore"):
                 try restore(); reply(connection, value: try snapshot())
+            case ("GET", "/rotation"): reply(connection, value: rotationState())
+            case ("POST", "/rotation"):
+                let input = try JSONDecoder().decode(SetDisplayRotation.self, from: request.body)
+                reply(connection, value: try setRotation(input.degrees))
             default: reply(connection, status: 404, value: DisplayFailure("알 수 없는 요청입니다."))
             }
         } catch { reply(connection, status: 400, value: DisplayFailure(error.localizedDescription)) }
@@ -157,6 +184,67 @@ final class DisplayHelper: NSObject, NSApplicationDelegate {
         connection.send(content: Data(header.utf8) + body, completion: .contentProcessed { _ in connection.cancel() })
     }
 }
+/// fb-rotate mechanism: `IOServiceRequestProbe` with `kIOFBSetTransform` (0x400) and the quadrant in bits 7–8.
+/// External panels on a MacBook Pro accept this; the built-in panel often rejects it, which is reported as unsupported.
+private enum MainDisplayProbe {
+    static func sensedDegrees(_ display: CGDirectDisplayID) -> Int? {
+        guard let symbol = dlsym(UnsafeMutableRawPointer(bitPattern: -2), "CGDisplayRotation") else { return nil }
+        let function = unsafeBitCast(symbol, to: (@convention(c) (CGDirectDisplayID) -> Double).self)
+        return DisplayRotationAngle.normalized(Int(function(display).rounded()))
+    }
+
+    static func apply(degrees: Int, display: CGDirectDisplayID = CGMainDisplayID()) -> DisplayRotation {
+        let current = sensedDegrees(display) ?? 0
+        guard let options = DisplayRotationAngle.probeOptions(degrees: degrees), let service = framebuffer(for: display) else {
+            return DisplayRotation(degrees: current, supported: false)
+        }
+        defer { IOObjectRelease(service) }
+        guard IOServiceRequestProbe(service, options) == KERN_SUCCESS else {
+            return DisplayRotation(degrees: current, supported: false)
+        }
+        return DisplayRotation(degrees: sensedDegrees(display) ?? degrees, supported: true)
+    }
+
+    static func framebuffer(for display: CGDirectDisplayID) -> io_service_t? {
+        let vendor = CGDisplayVendorNumber(display)
+        let model = CGDisplayModelNumber(display)
+        let serial = CGDisplaySerialNumber(display)
+        var iterator: io_iterator_t = 0
+        guard IOServiceGetMatchingServices(kIOMainPortDefault, IOServiceMatching("IOFramebuffer"), &iterator) == KERN_SUCCESS else { return nil }
+        defer { IOObjectRelease(iterator) }
+        while true {
+            let service = IOIteratorNext(iterator)
+            if service == 0 { return nil }
+            if owns(service, vendor: vendor, model: model, serial: serial) { return service }
+            IOObjectRelease(service)
+        }
+    }
+
+    private static func owns(_ framebuffer: io_service_t, vendor: UInt32, model: UInt32, serial: UInt32) -> Bool {
+        if sameDisplay(framebuffer, vendor: vendor, model: model, serial: serial) { return true }
+        var children: io_iterator_t = 0
+        let opened = "IOService".withCString { IORegistryEntryGetChildIterator(framebuffer, $0, &children) }
+        guard opened == KERN_SUCCESS else { return false }
+        defer { IOObjectRelease(children) }
+        while true {
+            let child = IOIteratorNext(children)
+            if child == 0 { return false }
+            defer { IOObjectRelease(child) }
+            if sameDisplay(child, vendor: vendor, model: model, serial: serial) { return true }
+        }
+    }
+
+    private static func sameDisplay(_ entry: io_registry_entry_t, vendor: UInt32, model: UInt32, serial: UInt32) -> Bool {
+        guard let entryVendor = number(entry, "DisplayVendorID"), let entryModel = number(entry, "DisplayProductID") else { return false }
+        return entryVendor == vendor && entryModel == model && (number(entry, "DisplaySerialNumber") ?? 0) == serial
+    }
+
+    private static func number(_ entry: io_registry_entry_t, _ key: String) -> UInt32? {
+        guard let property = IORegistryEntryCreateCFProperty(entry, key as CFString, kCFAllocatorDefault, 0)?.takeRetainedValue() else { return nil }
+        return (property as? NSNumber)?.uint32Value
+    }
+}
+
 private enum HelperError: LocalizedError { case message(String); var errorDescription: String? { if case .message(let s) = self { return s }; return nil } }
 private final class HTTPListener: @unchecked Sendable {
     private let descriptor: Int32
