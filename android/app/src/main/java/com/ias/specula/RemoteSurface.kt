@@ -41,7 +41,7 @@ class RemoteSurface(context: Context) : View(context) {
     private var initialDistance = 0f
     private var initialCenterX = 0f
     private var initialCenterY = 0f
-    private val heldKeys = mutableMapOf<Int, Int>()
+    private val heldKeys = mutableMapOf<Pair<Int, Int>, Int>()
     private val paint = Paint(Paint.FILTER_BITMAP_FLAG)
 
     init {
@@ -216,52 +216,39 @@ class RemoteSurface(context: Context) : View(context) {
         }
     }
 
-    private fun symbol(event: KeyEvent): Int? =
-        when (event.keyCode) {
-            KeyEvent.KEYCODE_ENTER -> 0xff0d
-            KeyEvent.KEYCODE_DEL -> 0xff08
-            KeyEvent.KEYCODE_FORWARD_DEL -> 0xffff
-            KeyEvent.KEYCODE_ESCAPE -> 0xff1b
-            KeyEvent.KEYCODE_TAB -> 0xff09
-            KeyEvent.KEYCODE_DPAD_LEFT -> 0xff51
-            KeyEvent.KEYCODE_DPAD_UP -> 0xff52
-            KeyEvent.KEYCODE_DPAD_RIGHT -> 0xff53
-            KeyEvent.KEYCODE_DPAD_DOWN -> 0xff54
-            KeyEvent.KEYCODE_CTRL_LEFT -> 0xffe3
-            KeyEvent.KEYCODE_CTRL_RIGHT -> 0xffe4
-            KeyEvent.KEYCODE_SHIFT_LEFT -> 0xffe1
-            KeyEvent.KEYCODE_SHIFT_RIGHT -> 0xffe2
-            KeyEvent.KEYCODE_ALT_LEFT,
-            KeyEvent.KEYCODE_META_LEFT -> 0xffeb
-            KeyEvent.KEYCODE_ALT_RIGHT -> 0xffe7
-            KeyEvent.KEYCODE_META_RIGHT -> 0xffec
-            KeyEvent.KEYCODE_LEFT_BRACKET ->
-                PhysicalKey.symbol(47, event.isShiftPressed, event.isAltPressed)
-            KeyEvent.KEYCODE_RIGHT_BRACKET ->
-                PhysicalKey.symbol(48, event.isShiftPressed, event.isAltPressed)
-            in KeyEvent.KEYCODE_A..KeyEvent.KEYCODE_Z ->
-                PhysicalKey.symbol(event.keyCode - KeyEvent.KEYCODE_A + 4, event.isShiftPressed)
-            else -> {
-                val c =
-                    event.getUnicodeChar(
-                        event.metaState and
-                            KeyEvent.META_CTRL_MASK.inv() and
-                            KeyEvent.META_ALT_MASK.inv() and
-                            KeyEvent.META_META_MASK.inv()
-                    )
-                if (c == 0) null else if (c <= 255) c else 0x01000000 or c
-            }
-        }
+    private fun isPhysical(event: KeyEvent): Boolean =
+        event.deviceId != KeyCharacterMap.VIRTUAL_KEYBOARD &&
+            event.flags and KeyEvent.FLAG_SOFT_KEYBOARD == 0 &&
+            event.isFromSource(InputDevice.SOURCE_KEYBOARD)
+
+    // onKeyDown alone runs AFTER the IME. Consume here so physical input can never
+    // become a later commitText as well. Soft IME composition/commits stay independent.
+    override fun onKeyPreIme(keyCode: Int, event: KeyEvent): Boolean =
+        (isPhysical(event) && handleKey(event)) || super.onKeyPreIme(keyCode, event)
+
+    // Also consume Tab/arrows before View focus navigation when no IME is active.
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean =
+        (isPhysical(event) && handleKey(event)) || super.dispatchKeyEvent(event)
+
+    private fun symbol(event: KeyEvent): Int? {
+        PhysicalKey.fromKeyCode(event.keyCode, event.isShiftPressed, event.isMetaPressed)
+            ?.let { return it }
+        if (isPhysical(event)) return null
+        // Some soft keyboards send virtual KeyEvents instead of commitText.
+        val c = event.unicodeChar
+        return if (c == 0) null else if (c <= 255) c else 0x01000000 or c
+    }
 
     private fun handleKey(event: KeyEvent): Boolean {
+        val identity = event.deviceId to event.keyCode
         if (event.action == KeyEvent.ACTION_DOWN) {
-            val s = heldKeys[event.keyCode] ?: symbol(event) ?: return false
-            heldKeys[event.keyCode] = s
+            val s = heldKeys[identity] ?: symbol(event) ?: return false
+            heldKeys[identity] = s
             key(s, true)
             return true
         }
         if (event.action == KeyEvent.ACTION_UP) {
-            val s = heldKeys.remove(event.keyCode) ?: symbol(event) ?: return false
+            val s = heldKeys.remove(identity) ?: symbol(event) ?: return false
             key(s, false)
             return true
         }
@@ -269,10 +256,7 @@ class RemoteSurface(context: Context) : View(context) {
     }
 
     override fun onFocusChanged(gainFocus: Boolean, direction: Int, previouslyFocusedRect: Rect?) {
-        if (!gainFocus) {
-            heldKeys.values.forEach { key(it, false) }
-            heldKeys.clear()
-        }
+        if (!gainFocus) releaseKeys()
         super.onFocusChanged(gainFocus, direction, previouslyFocusedRect)
     }
 
@@ -282,7 +266,18 @@ class RemoteSurface(context: Context) : View(context) {
     override fun onKeyUp(keyCode: Int, event: KeyEvent) =
         handleKey(event) || super.onKeyUp(keyCode, event)
 
+    override fun onWindowFocusChanged(hasWindowFocus: Boolean) {
+        if (!hasWindowFocus) releaseKeys()
+        super.onWindowFocusChanged(hasWindowFocus)
+    }
+
+    private fun releaseKeys() {
+        heldKeys.values.forEach { key(it, false) }
+        heldKeys.clear()
+    }
+
     override fun onDetachedFromWindow() {
+        releaseKeys()
         if (dragging) send(lastX, lastY, 0)
         showKeyboard(false)
         super.onDetachedFromWindow()

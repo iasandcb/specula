@@ -66,15 +66,21 @@ the helper. The helper is optional for remote viewing and input.
   release or cancellation releases the button.
 - Two-finger tap: right click. Two-finger pinch: zoom, up to 8×. Move both fingers
   to pan the viewport. Screen rotation/resizing resets the viewport to fit.
-- The bottom toolbar always has four equal controls in one row, each at least
-  48dp wide on supported phone widths and 72dp high, with 18sp text. The fixed
-  two-line **⌃Space 입력기** label keeps the row compact. **세로** / **가로**
-  names the next orientation.
-- **키보드** toggles the Android IME; committed text, backspace, Enter, and
-  hardware keys go to the Mac. Composition remains local until committed, so
-  Korean syllables are not duplicated. Hardware letter positions stay Latin for
-  the Mac IME. Left Alt/Meta sends Mac Command; right Alt sends Option. The
-  input-source button sends Control-down, Space-down/up, Control-up.
+- The bottom toolbar has five controls in one row, each at least 48dp wide.
+  Landscape uses one-line labels and a 48dp height; portrait permits two-line
+  labels and uses a 72dp height. Narrow windows can scroll the row. **세로** /
+  **가로** names the next orientation. **⌘Tab** sends Command-down, Tab-down/up,
+  Command-up to switch Mac apps.
+- **키보드** toggles the Android IME. Soft-keyboard composition stays local until
+  `commitText`; committed text and virtual Enter/backspace go to the Mac.
+  Physical keyboard events are consumed in `onKeyPreIme` before Android's IME,
+  with `dispatchKeyEvent` as a fallback, so they cannot also produce IME commits.
+  US QWERTY positions and immediate key-down/up events let the Mac IME compose
+  live, independent of the Android keyboard layout. Both Alt keys send Command
+  (`Super_L`, `0xffeb`); both Windows/Meta keys send Option (`Meta_L`, `0xffe7`),
+  matching the Swift client's Mac keysyms. Ctrl remains Control. Android intercepts
+  Alt+Tab and Meta+Tab; use **⌘Tab** for remote app switching. The input-source
+  button sends Control-down, Space-down/up, Control-up.
 - Back hides the keyboard first, then disconnects. Connection survives Activity
   recreation through a ViewModel. The display helper receives a heartbeat every
   15 seconds and a best-effort restore on disconnect; its existing 60-second

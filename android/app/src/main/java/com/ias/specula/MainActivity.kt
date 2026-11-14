@@ -7,6 +7,7 @@ import androidx.activity.compose.LocalActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
@@ -69,44 +70,60 @@ private fun Specula(model: SessionModel = viewModel()) {
                 update = { it.frame = model.bitmap },
                 modifier = Modifier.weight(1f).fillMaxWidth(),
             )
-            // Four equal touch targets stay in one row. The input-source label has a fixed line
-            // break.
+            // One row, with extra width for the input-source label. Scroll only on unusually
+            // narrow windows to preserve all five controls' 48dp minimum touch width.
             val landscape = androidx.compose.ui.platform.LocalConfiguration.current.orientation ==
                 android.content.res.Configuration.ORIENTATION_LANDSCAPE
-            Row(
-                Modifier.fillMaxWidth().padding(horizontal = 4.dp),
-                horizontalArrangement = Arrangement.spacedBy(4.dp),
-            ) {
-                @Composable
-                fun Control(title: String, enabled: Boolean = true, action: () -> Unit) {
-                    TextButton(
-                        onClick = action,
-                        enabled = enabled,
-                        modifier = Modifier.weight(1f).heightIn(min = if (landscape) 48.dp else 72.dp).widthIn(min = 48.dp),
-                        contentPadding = PaddingValues(2.dp),
+            BoxWithConstraints(Modifier.fillMaxWidth()) {
+                val toolbarWidth = maxOf(maxWidth, 312.dp)
+                Row(
+                    Modifier.horizontalScroll(rememberScrollState())
+                        .width(toolbarWidth)
+                        .padding(horizontal = 4.dp),
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    @Composable
+                    fun Control(
+                        title: String,
+                        enabled: Boolean = true,
+                        weight: Float = 1f,
+                        action: () -> Unit,
                     ) {
-                        Text(
-                            title,
-                            fontSize = 18.sp,
-                            maxLines = if (landscape) 1 else 2,
-                            textAlign = androidx.compose.ui.text.style.TextAlign.Center,
-                        )
+                        TextButton(
+                            onClick = action,
+                            enabled = enabled,
+                            modifier = Modifier.weight(weight)
+                                .height(if (landscape) 48.dp else 72.dp)
+                                .widthIn(min = 48.dp),
+                            contentPadding = PaddingValues(2.dp),
+                        ) {
+                            Text(
+                                title,
+                                fontSize = 18.sp,
+                                maxLines = if (landscape) 1 else 2,
+                                textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                            )
+                        }
                     }
-                }
-                Control("키보드") {
-                    keyboard = !keyboard
-                    surface?.showKeyboard(keyboard)
-                }
-                Control(if (landscape) "⌃Space 입력기" else "⌃Space\n입력기") { model.inputSource() }
-                Control("해상도", !model.busy) {
-                    surface?.showKeyboard(false)
-                    keyboard = false
-                    model.modes()
-                }
-                Control(if (model.portrait) "가로" else "세로", !model.busy) {
-                    surface?.showKeyboard(false)
-                    keyboard = false
-                    model.rotate()
+                    Control("키보드") {
+                        keyboard = !keyboard
+                        surface?.showKeyboard(keyboard)
+                    }
+                    Control(
+                        if (landscape) "⌃Space 입력기" else "⌃Space\n입력기",
+                        weight = 2f,
+                    ) { model.inputSource() }
+                    Control("⌘Tab") { PhysicalKey.commandTab(model::key) }
+                    Control("해상도", !model.busy) {
+                        surface?.showKeyboard(false)
+                        keyboard = false
+                        model.modes()
+                    }
+                    Control(if (model.portrait) "가로" else "세로", !model.busy) {
+                        surface?.showKeyboard(false)
+                        keyboard = false
+                        model.rotate()
+                    }
                 }
             }
         } else {
