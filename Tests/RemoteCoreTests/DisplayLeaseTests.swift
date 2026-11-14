@@ -1,5 +1,6 @@
 import XCTest
 import DisplaySupport
+import RemoteCore
 
 final class DisplayLeaseTests: XCTestCase {
     func testOnlyTailnetAndLoopbackPeersAreAllowed() {
@@ -29,5 +30,10 @@ final class DisplayLeaseTests: XCTestCase {
         lease.changed(from: 42, now: now); lease.clear(); lease.renew(now: now)
         XCTAssertNil(lease.originalModeID); XCTAssertNil(lease.expiresAt)
         XCTAssertFalse(lease.expired(now: now.addingTimeInterval(120)))
+    }
+    func testResolutionReturnsOnlyOnAutomaticReconnect() {
+        XCTAssertEqual(DisplayReconnect.mode(reconnecting: true, selected: 42), 42)
+        XCTAssertNil(DisplayReconnect.mode(reconnecting: false, selected: 42))
+        XCTAssertNil(DisplayReconnect.mode(reconnecting: true, selected: nil))
     }
 }

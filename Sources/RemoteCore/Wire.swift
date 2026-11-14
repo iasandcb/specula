@@ -1,5 +1,9 @@
 import Foundation
+#if canImport(CommonCrypto)
 import CommonCrypto
+#else
+import CCryptoShim
+#endif
 
 public enum RFBError: LocalizedError {
     case invalid(String)

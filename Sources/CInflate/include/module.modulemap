@@ -1,0 +1,4 @@
+module CInflate {
+    header "inflate_bridge.h"
+    export *
+}

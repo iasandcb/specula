@@ -112,3 +112,93 @@ public enum PointerScroll {
         return (count, consumedSteps)
     }
 }
+
+/// Motion is limited to one sample per interval. Button changes, including wheel clicks, are sent immediately.
+public struct PointerCoalescer {
+    public struct Sample: Equatable, Sendable {
+        public var x: Int
+        public var y: Int
+        public var buttons: UInt8
+        public init(x: Int, y: Int, buttons: UInt8) {
+            self.x = x
+            self.y = y
+            self.buttons = buttons
+        }
+    }
+    public struct Result: Equatable {
+        public var send: [Sample]
+        /// Milliseconds until a deferred move should be flushed. Nil when nothing is waiting.
+        public var flushAfterMs: Int?
+        public init(send: [Sample], flushAfterMs: Int?) {
+            self.send = send
+            self.flushAfterMs = flushAfterMs
+        }
+    }
+
+    public var intervalMs: Int
+    private var lastSent: Sample?
+    private var pending: Sample?
+    private var lastSentMs: Int?
+
+    public init(intervalMs: Int = 16) { self.intervalMs = max(1, intervalMs) }
+
+    public mutating func submit(_ sample: Sample, nowMs: Int) -> Result {
+        if lastSent == nil { return commit(sample, nowMs: nowMs) }
+        let previous = pending?.buttons ?? lastSent!.buttons
+        if sample.buttons != previous { return commit(sample, nowMs: nowMs) }
+        if pending == nil, sample == lastSent { return Result(send: [], flushAfterMs: nil) }
+        pending = sample
+        let due = (lastSentMs ?? nowMs) + intervalMs
+        if nowMs >= due { return commit(sample, nowMs: nowMs) }
+        return Result(send: [], flushAfterMs: due - nowMs)
+    }
+
+    public mutating func flush(nowMs: Int) -> Result {
+        guard let pending else { return Result(send: [], flushAfterMs: nil) }
+        let due = (lastSentMs ?? nowMs) + intervalMs
+        if nowMs >= due { return commit(pending, nowMs: nowMs) }
+        return Result(send: [], flushAfterMs: due - nowMs)
+    }
+
+    private mutating func commit(_ sample: Sample, nowMs: Int) -> Result {
+        pending = nil
+        if lastSent == sample { return Result(send: [], flushAfterMs: nil) }
+        lastSent = sample
+        lastSentMs = nowMs
+        return Result(send: [sample], flushAfterMs: nil)
+    }
+}
+
+/// One glyph at a time, so the system pointer, the Mac cursor, and a local arrow are never stacked.
+public enum PointerGlyph: Equatable {
+    case hidden
+    case localArrow
+    case server
+    public static func choose(pointerInUse: Bool, hasServerCursor: Bool, serverHidCursor: Bool) -> PointerGlyph {
+        guard pointerInUse, !serverHidCursor else { return .hidden }
+        return hasServerCursor ? .server : .localArrow
+    }
+}
+
+public struct CursorLayout: Equatable {
+    public var x: Double
+    public var y: Double
+    public var width: Double
+    public var height: Double
+
+    /// Places the hotspot on the pointer. A cursor that would be smaller than `minimumHeight` points is enlarged.
+    public static func frame(pointerX: Double, pointerY: Double, hotspotX: Int, hotspotY: Int, cursorWidth: Int, cursorHeight: Int, pointScale: Double, minimumHeight: Double = 22) -> CursorLayout? {
+        guard cursorWidth > 0, cursorHeight > 0, pointScale.isFinite, pointScale > 0, minimumHeight >= 0,
+              pointerX.isFinite, pointerY.isFinite else { return nil }
+        var scale = pointScale
+        if Double(cursorHeight) * scale < minimumHeight {
+            scale = minimumHeight / Double(cursorHeight)
+        }
+        return CursorLayout(
+            x: pointerX - Double(hotspotX) * scale,
+            y: pointerY - Double(hotspotY) * scale,
+            width: Double(cursorWidth) * scale,
+            height: Double(cursorHeight) * scale
+        )
+    }
+}

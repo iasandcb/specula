@@ -1,7 +1,15 @@
 import Foundation
+#if canImport(CommonCrypto)
 import CommonCrypto
+#else
+import CCryptoShim
+#endif
+#if canImport(CryptoKit)
 import CryptoKit
+#endif
+#if canImport(Security)
 import Security
+#endif
 import BigInt
 
 /// Apple Remote Desktop security type 30. This protects credentials, not the RFB session.
@@ -9,9 +17,10 @@ import BigInt
 public enum ARD {
     static func random(_ count: Int) throws -> Data {
         var bytes = [UInt8](repeating: 0, count: count)
-        guard SecRandomCopyBytes(kSecRandomDefault, count, &bytes) == errSecSuccess else {
-            throw RFBError.invalid("인증용 난수를 만들지 못했습니다.")
+        let status = bytes.withUnsafeMutableBytes { raw in
+            SecRandomCopyBytes(kSecRandomDefault, count, raw.baseAddress!)
         }
+        guard status == errSecSuccess else { throw RFBError.invalid("인증용 난수를 만들지 못했습니다.") }
         return Data(bytes)
     }
 
