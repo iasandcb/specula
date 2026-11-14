@@ -45,7 +45,7 @@ final class DisplayHelper: NSObject, NSApplicationDelegate {
             address = try tailscaleAddress()
             let listener = try HTTPListener(port: 5901) { [weak self] connection in
                 let request = HTTPRequestReader(connection: connection) { request in
-                    Task { @MainActor in self?.handle(request, connection: connection) }
+                    Task { @MainActor in await self?.handle(request, connection: connection) }
                 }
                 request.start()
             }
@@ -53,7 +53,7 @@ final class DisplayHelper: NSObject, NSApplicationDelegate {
             timer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
                 Task { @MainActor in
                     guard let self, self.lease.expired(now: Date()) else { return }
-                    try? self.restore()
+                    try? await self.restore()
                 }
             }
             newCode()
@@ -64,10 +64,10 @@ final class DisplayHelper: NSObject, NSApplicationDelegate {
         guard let target = modes().first(where: { $0.width == 1280 && $0.height == 720 && $0.pixelWidth == 1280 }) else {
             throw HelperError.message("1280 × 720 모드를 사용할 수 없어 실화면 검사를 생략했습니다.")
         }
-        defer { try? restore() }
+        defer { try? restoreMode() }
         let changed = try change(UInt32(bitPattern: target.ioDisplayModeID))
         guard changed.current.width == 1280, changed.current.height == 720 else { throw HelperError.message("해상도 변경 확인에 실패했습니다.") }
-        try restore()
+        try restoreMode()
         let after = try snapshot()
         guard before.current.id == after.current.id else { throw HelperError.message("해상도 복원 확인에 실패했습니다.") }
         print("Verified 1280 × 720 change and original-mode restoration.")
@@ -141,12 +141,15 @@ final class DisplayHelper: NSObject, NSApplicationDelegate {
         lease.changed(from: UInt32(bitPattern: current.ioDisplayModeID), now: Date())
         return try snapshot()
     }
-    private func restore() throws {
+    private func restore() async throws {
         if let originalRotation {
-            _ = MainDisplayProbe.apply(degrees: originalRotation)
+            _ = await MainDisplayProbe.apply(degrees: originalRotation)
             commandedRotation = originalRotation
             self.originalRotation = nil
         }
+        try restoreMode()
+    }
+    private func restoreMode() throws {
         guard let original, let display = originalDisplay else { lease.clear(); return }
         guard CGDisplaySetDisplayMode(display, original, nil) == .success else { throw HelperError.message("원래 해상도를 복원하지 못했습니다. 맥 디스플레이 설정에서 확인해 주세요.") }
         self.original = nil; originalDisplay = nil; lease.clear()
@@ -154,20 +157,26 @@ final class DisplayHelper: NSObject, NSApplicationDelegate {
     private func rotationState() -> DisplayRotation {
         MainDisplayProbe.current()
     }
-    private func setRotation(_ degrees: Int) throws -> DisplayRotation {
+    private func setRotation(_ degrees: Int) async throws -> DisplayRotation {
         guard let angle = DisplayRotationAngle.normalized(degrees) else { throw HelperError.message("회전 각도는 0, 90, 180, 270만 사용할 수 있습니다.") }
         let display = CGMainDisplayID()
         let before = MainDisplayProbe.current(display: display).degrees
-        let applied = MainDisplayProbe.apply(degrees: angle, display: display)
+        let applied = await MainDisplayProbe.apply(degrees: angle, display: display)
         guard applied.supported else { return applied }
         if originalRotation == nil, applied.degrees != before { originalRotation = before }
         commandedRotation = applied.degrees
         return applied
     }
-    @objc private func restoreAction() { do { try restore() } catch { showMessage(error.localizedDescription) } }
-    @objc private func quit() { do { try restore(); NSApp.terminate(nil) } catch { showMessage(error.localizedDescription) } }
-    func applicationWillTerminate(_ notification: Notification) { try? restore() }
-    private func handle(_ request: HTTPRequest, connection: HTTPConnection) {
+    @objc private func restoreAction() { Task { @MainActor in do { try await restore() } catch { showMessage(error.localizedDescription) } } }
+    @objc private func quit() { Task { @MainActor in do { try await restore(); NSApp.terminate(nil) } catch { showMessage(error.localizedDescription) } } }
+    func applicationWillTerminate(_ notification: Notification) {
+        if let originalRotation {
+            _ = MainDisplayProbe.applyNow(degrees: originalRotation)
+            self.originalRotation = nil
+        }
+        try? restoreMode()
+    }
+    private func handle(_ request: HTTPRequest, connection: HTTPConnection) async {
         do {
             if request.path == "/pair", request.method == "POST" {
                 if Date().timeIntervalSince(pairWindow) > 60 { failedPairs = 0; pairWindow = Date() }
@@ -189,11 +198,11 @@ final class DisplayHelper: NSObject, NSApplicationDelegate {
             case ("POST", "/heartbeat"):
                 lease.renew(now: Date()); reply(connection, value: ["ok": true])
             case ("POST", "/restore"):
-                try restore(); reply(connection, value: try snapshot())
+                try await restore(); reply(connection, value: try snapshot())
             case ("GET", "/rotation"): reply(connection, value: rotationState())
             case ("POST", "/rotation"):
                 let input = try JSONDecoder().decode(SetDisplayRotation.self, from: request.body)
-                reply(connection, value: try setRotation(input.degrees))
+                reply(connection, value: try await setRotation(input.degrees))
             default: reply(connection, status: 404, value: DisplayFailure("알 수 없는 요청입니다."))
             }
         } catch { reply(connection, status: 400, value: DisplayFailure(error.localizedDescription)) }
@@ -208,6 +217,7 @@ final class DisplayHelper: NSObject, NSApplicationDelegate {
 /// The working path is MonitorPanel's `MPDisplay setOrientation:`, the same setter displayplacer uses.
 /// That tool does not call `lockAccess` or `notifyReconfigure`, and neither does this helper.
 /// The IOKit probe remains only as a fallback for Intel Macs when MonitorPanel cannot answer.
+@MainActor
 private enum MainDisplayProbe {
     #if arch(arm64) || arch(arm64e)
     static let appleSilicon = true
@@ -215,7 +225,8 @@ private enum MainDisplayProbe {
     static let appleSilicon = false
     #endif
 
-    static func sensedDegrees(_ display: CGDirectDisplayID) -> Int? {
+    /// CoreGraphics display queries are thread-safe, so the poll can read them without hopping back to the main actor.
+    nonisolated static func sensedDegrees(_ display: CGDirectDisplayID) -> Int? {
         guard let symbol = dlsym(UnsafeMutableRawPointer(bitPattern: -2), "CGDisplayRotation") else { return nil }
         let function = unsafeBitCast(symbol, to: (@convention(c) (CGDirectDisplayID) -> Double).self)
         return DisplayRotationAngle.normalized(Int(function(display).rounded()))
@@ -232,55 +243,94 @@ private enum MainDisplayProbe {
         return DisplayRotation(degrees: sensed, supported: route == .iokit)
     }
 
-    static func apply(degrees: Int, display: CGDirectDisplayID = CGMainDisplayID()) -> DisplayRotation {
+    static func apply(degrees: Int, display: CGDirectDisplayID = CGMainDisplayID()) async -> DisplayRotation {
+        switch begin(degrees: degrees, display: display) {
+        case .finished(let rotation): return rotation
+        case .watching(let watch):
+            // Suspending lets the main run loop apply the rotation and lets GET /modes run. A nested
+            // CFRunLoopRunInMode held this actor and re-entered CoreGraphics while the display was changing.
+            guard await confirm(watch) else {
+                return DisplayRotation(degrees: watch.panel.orientation ?? watch.current, supported: false)
+            }
+            return DisplayRotation(degrees: degrees, supported: true)
+        }
+    }
+
+    /// One setOrientation: and one read, for shutdown. It does not poll.
+    static func applyNow(degrees: Int, display: CGDirectDisplayID = CGMainDisplayID()) -> DisplayRotation {
+        switch begin(degrees: degrees, display: display) {
+        case .finished(let rotation): return rotation
+        case .watching(let watch):
+            if watch.reached() { return DisplayRotation(degrees: degrees, supported: true) }
+            return DisplayRotation(degrees: watch.panel.orientation ?? watch.current, supported: false)
+        }
+    }
+
+    private enum Begin {
+        case finished(DisplayRotation)
+        case watching(Watch)
+    }
+
+    private struct Watch {
+        let panel: MonitorPanelRotation.Panel
+        let current: Int
+        let degrees: Int
+        let display: CGDirectDisplayID
+        let beforePixels: PixelBox
+        let beforeBounds: PixelBox
+        /// Runs on the main actor: `panel` is the MPDisplay `setOrientation:` was sent to.
+        @MainActor
+        func reached() -> Bool {
+            if MainDisplayProbe.sensedDegrees(display) == degrees || panel.orientation == degrees { return true }
+            let pixels = MainDisplayProbe.pixelBox(display)
+            let bounds = MainDisplayProbe.boundsBox(display)
+            if pixels != beforePixels, DisplayOrientationCheck.matches(width: pixels.width, height: pixels.height, degrees: degrees) { return true }
+            if bounds != beforeBounds, DisplayOrientationCheck.matches(width: bounds.width, height: bounds.height, degrees: degrees) { return true }
+            return false
+        }
+    }
+
+    private static func begin(degrees: Int, display: CGDirectDisplayID) -> Begin {
         let sensed = sensedDegrees(display) ?? 0
         if let panel = MonitorPanelRotation.lookup(display) {
             let current = panel.orientation ?? sensed
             guard DisplayRotationRoute.select(monitorPanelReady: panel.canChangeOrientation, monitorPanelRejected: !panel.canChangeOrientation, appleSilicon: appleSilicon, iokitFramebuffer: false) == .monitorPanel else {
-                return DisplayRotation(degrees: current, supported: false)
+                return .finished(DisplayRotation(degrees: current, supported: false))
             }
             let beforePixels = pixelBox(display)
             let beforeBounds = boundsBox(display)
             guard panel.setOrientation(degrees) else {
-                return DisplayRotation(degrees: current, supported: false)
+                return .finished(DisplayRotation(degrees: current, supported: false))
             }
-            // setOrientation: schedules the change on the main run loop. Sleeping here keeps that change
-            // from running, so the readback stays on the old angle and the phone is told the rotation failed
-            // after the panel has already turned.
-            guard confirm(display, panel: panel, degrees: degrees, beforePixels: beforePixels, beforeBounds: beforeBounds) else {
-                return DisplayRotation(degrees: panel.orientation ?? current, supported: false)
-            }
-            return DisplayRotation(degrees: degrees, supported: true)
+            let watch = Watch(panel: panel, current: current, degrees: degrees, display: display, beforePixels: beforePixels, beforeBounds: beforeBounds)
+            if watch.reached() { return .finished(DisplayRotation(degrees: degrees, supported: true)) }
+            return .watching(watch)
         }
         guard DisplayRotationRoute.select(monitorPanelReady: false, monitorPanelRejected: false, appleSilicon: appleSilicon, iokitFramebuffer: hasIntelFramebuffer(display)) == .iokit else {
-            return DisplayRotation(degrees: sensed, supported: false)
+            return .finished(DisplayRotation(degrees: sensed, supported: false))
         }
-        return iokitApply(degrees: degrees, display: display, current: sensed)
+        return .finished(iokitApply(degrees: degrees, display: display, current: sensed))
     }
 
-    private struct PixelBox: Equatable { var width: Int; var height: Int }
+    private struct PixelBox: Equatable, Sendable { var width: Int; var height: Int }
 
-    private static func pixelBox(_ display: CGDirectDisplayID) -> PixelBox {
+    private nonisolated static func pixelBox(_ display: CGDirectDisplayID) -> PixelBox {
         PixelBox(width: Int(CGDisplayPixelsWide(display)), height: Int(CGDisplayPixelsHigh(display)))
     }
 
-    private static func boundsBox(_ display: CGDirectDisplayID) -> PixelBox {
+    private nonisolated static func boundsBox(_ display: CGDirectDisplayID) -> PixelBox {
         let bounds = CGDisplayBounds(display)
         return PixelBox(width: Int(bounds.width.rounded()), height: Int(bounds.height.rounded()))
     }
 
-    /// Poll the angle and the oriented size. A size that merely still matches the old mode is not confirmation.
-    private static func confirm(_ display: CGDirectDisplayID, panel: MonitorPanelRotation.Panel, degrees: Int, beforePixels: PixelBox, beforeBounds: PixelBox) -> Bool {
+    /// Poll without nesting the main run loop, so a resolution-list request is not stuck behind the rotation.
+    private static func confirm(_ watch: Watch) async -> Bool {
         let deadline = Date().addingTimeInterval(5)
-        while true {
-            if sensedDegrees(display) == degrees || panel.orientation == degrees { return true }
-            let pixels = pixelBox(display)
-            let bounds = boundsBox(display)
-            if pixels != beforePixels, DisplayOrientationCheck.matches(width: pixels.width, height: pixels.height, degrees: degrees) { return true }
-            if bounds != beforeBounds, DisplayOrientationCheck.matches(width: bounds.width, height: bounds.height, degrees: degrees) { return true }
-            if Date() >= deadline { return false }
-            CFRunLoopRunInMode(CFRunLoopMode.defaultMode, 0.1, false)
+        while Date() < deadline {
+            if watch.reached() { return true }
+            try? await Task.sleep(nanoseconds: 100_000_000)
         }
+        return watch.reached()
     }
 
     private static func hasIntelFramebuffer(_ display: CGDirectDisplayID) -> Bool {

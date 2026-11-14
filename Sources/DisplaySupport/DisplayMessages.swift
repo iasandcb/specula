@@ -89,6 +89,12 @@ public enum DisplayOrientationCheck {
     }
 }
 
+/// Phone-side limits for the display helper. The list must fail fast; rotation is allowed to poll.
+public enum DisplayHTTP {
+    public static let listTimeout: TimeInterval = 3
+    public static let rotationTimeout: TimeInterval = 6
+}
+
 /// Which mechanism may rotate the main display.
 /// Apple Silicon framebuffers are `IOMobileFramebuffer` and ignore the IOKit probe, so that path is Intel only.
 public enum DisplayRotationRoute: Equatable, Sendable {

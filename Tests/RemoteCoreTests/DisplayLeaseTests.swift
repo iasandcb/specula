@@ -87,6 +87,11 @@ final class DisplayLeaseTests: XCTestCase {
         XCTAssertEqual(DisplayOrientationCheck.failureTitle(degrees: 90), "세로 모드")
         XCTAssertEqual(DisplayOrientationCheck.failureTitle(degrees: 45), "화면 회전")
     }
+    func testResolutionListUsesAShortTimeout() {
+        XCTAssertLessThanOrEqual(DisplayHTTP.listTimeout, 3)
+        XCTAssertGreaterThan(DisplayHTTP.rotationTimeout, 5)
+        XCTAssertLessThanOrEqual(DisplayHTTP.rotationTimeout, 6)
+    }
     func testConnectedToolbarKeepsTheKeyboardButtonOnANarrowPhone() {
         for portrait in [false, true] {
             let titles = SessionControls.titles(macIsPortrait: portrait)
