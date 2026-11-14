@@ -16,7 +16,7 @@ struct ScreenSurface: UIViewRepresentable {
     }
 }
 
-final class RemoteCanvas: UIView {
+final class RemoteCanvas: UIView, UIGestureRecognizerDelegate, UIPointerInteractionDelegate {
     var remoteOptionHeld = false
     var fill = false { didSet { setNeedsDisplay() } }
     var image: UIImage? { didSet { setNeedsDisplay() } }
@@ -28,8 +28,22 @@ final class RemoteCanvas: UIView {
     private var allowKeyCapture = false
     private var keyCaptureArmed = false
     private var updatingKeyCapture = false
+    private var pointerPresses: [PointerPressRecognizer] = []
+    private var pointerRecognizers: [UIGestureRecognizer] = []
+    private var wheelPendingX: Double = 0
+    private var wheelPendingY: Double = 0
+    private var lastPoint: CGPoint?
+    private var suppressPointerTap = false
+    private var suppressGeneration = 0
     // Cached so UIKit can ask during a responder transition without walking the chain.
     override var canBecomeFirstResponder: Bool { allowKeyCapture }
+    /// Finger and Pencil stay on the original gestures. Pointer clicks are a different touch type
+    /// once UIApplicationSupportsIndirectInputEvents is set, so a mouse-down is not a long press.
+    private static let directTouches = [
+        NSNumber(value: UITouch.TouchType.direct.rawValue),
+        NSNumber(value: UITouch.TouchType.pencil.rawValue)
+    ]
+    private static let pointerTouches = [NSNumber(value: UITouch.TouchType.indirectPointer.rawValue)]
     func setKeyCaptureEnabled(_ enabled: Bool) {
         keyCaptureEnabled = enabled
         refreshKeyCapture()
@@ -95,6 +109,20 @@ final class RemoteCanvas: UIView {
         backgroundColor = .black
         contentMode = .redraw
         clipsToBounds = true
+        installTouchGestures()
+        installPointerGestures()
+        addInteraction(UIPointerInteraction(delegate: self))
+        isAccessibilityElement = true
+        accessibilityLabel = "맥 화면. 탭으로 클릭, 길게 눌러 우클릭, 한 손가락으로 드래그, 두 손가락으로 스크롤. 마우스나 트랙패드로 포인터를 움직이고 클릭하고 스크롤"
+        let center = NotificationCenter.default
+        for name in [UITextField.textDidBeginEditingNotification, UITextField.textDidEndEditingNotification, UITextView.textDidBeginEditingNotification, UITextView.textDidEndEditingNotification] {
+            center.addObserver(self, selector: #selector(textInputChanged), name: name, object: nil)
+        }
+    }
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+    deinit { NotificationCenter.default.removeObserver(self) }
+
+    private func installTouchGestures() {
         let tap = UITapGestureRecognizer(target: self, action: #selector(tap(_:)))
         let drag = UIPanGestureRecognizer(target: self, action: #selector(drag(_:)))
         drag.maximumNumberOfTouches = 1
@@ -106,33 +134,55 @@ final class RemoteCanvas: UIView {
         // A long press is only a right click. Tap and drag wait until it fails.
         tap.require(toFail: rightClick)
         drag.require(toFail: rightClick)
-        addGestureRecognizer(tap); addGestureRecognizer(drag); addGestureRecognizer(scroll); addGestureRecognizer(rightClick)
-        isAccessibilityElement = true
-        accessibilityLabel = "맥 화면. 탭으로 클릭, 길게 눌러 우클릭, 한 손가락으로 드래그, 두 손가락으로 스크롤"
-        let center = NotificationCenter.default
-        for name in [UITextField.textDidBeginEditingNotification, UITextField.textDidEndEditingNotification, UITextView.textDidBeginEditingNotification, UITextView.textDidEndEditingNotification] {
-            center.addObserver(self, selector: #selector(textInputChanged), name: name, object: nil)
+        for recognizer in [tap, drag, scroll, rightClick] as [UIGestureRecognizer] {
+            recognizer.allowedTouchTypes = Self.directTouches
+            addGestureRecognizer(recognizer)
         }
     }
-    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
-    deinit { NotificationCenter.default.removeObserver(self) }
+    private func installPointerGestures() {
+        let hover = UIHoverGestureRecognizer(target: self, action: #selector(hover(_:)))
+        let wheel = UIPanGestureRecognizer(target: self, action: #selector(wheel(_:)))
+        wheel.allowedScrollTypesMask = UIScrollTypeMask.all
+        // Touch pans stay on the finger recognizers. Zero touches keeps this recognizer on
+        // wheel and trackpad scroll events, which report no UITouch.
+        wheel.minimumNumberOfTouches = 0
+        wheel.maximumNumberOfTouches = 0
+        let buttons: [UIEvent.ButtonMask] = [.primary, .secondary, UIEvent.ButtonMask.button(3)]
+        var presses: [PointerPressRecognizer] = []
+        var taps: [UITapGestureRecognizer] = []
+        for mask in buttons {
+            let press = PointerPressRecognizer(requiredButton: mask, target: self, action: #selector(pointerPress(_:)))
+            let tap = UITapGestureRecognizer(target: self, action: #selector(pointerTap(_:)))
+            tap.buttonMaskRequired = mask
+            tap.allowedTouchTypes = Self.pointerTouches
+            presses.append(press)
+            taps.append(tap)
+        }
+        pointerPresses = presses
+        pointerRecognizers = [hover, wheel] + presses + taps
+        for recognizer in pointerRecognizers {
+            recognizer.delegate = self
+            recognizer.cancelsTouchesInView = false
+            addGestureRecognizer(recognizer)
+        }
+    }
+
     private var imageRect: CGRect {
-        guard let image, bounds.width > 0, bounds.height > 0 else { return .zero }
-        let horizontal = bounds.width / image.size.width
-        let vertical = bounds.height / image.size.height
-        let scale = fill ? max(horizontal, vertical) : min(horizontal, vertical)
-        let size = CGSize(width: image.size.width * scale, height: image.size.height * scale)
-        return CGRect(x: (bounds.width - size.width) / 2, y: (bounds.height - size.height) / 2, width: size.width, height: size.height)
+        guard let image,
+              let frame = PointerMapping.displayedFrame(viewWidth: Double(bounds.width), viewHeight: Double(bounds.height), imageWidth: Double(image.size.width), imageHeight: Double(image.size.height), fill: fill)
+        else { return .zero }
+        return CGRect(x: CGFloat(frame.x), y: CGFloat(frame.y), width: CGFloat(frame.width), height: CGFloat(frame.height))
     }
     override func draw(_ rect: CGRect) { image?.draw(in: imageRect) }
+    private func framebufferPoint(_ viewPoint: CGPoint, clamp: Bool) -> CGPoint? {
+        guard let image,
+              let point = PointerMapping.framebufferPoint(viewX: Double(viewPoint.x), viewY: Double(viewPoint.y), viewWidth: Double(bounds.width), viewHeight: Double(bounds.height), imageWidth: Double(image.size.width), imageHeight: Double(image.size.height), fill: fill, clamp: clamp)
+        else { return nil }
+        return CGPoint(x: CGFloat(point.x), y: CGFloat(point.y))
+    }
     private func remote(_ recognizer: UIGestureRecognizer) -> CGPoint? {
-        guard let image, imageRect.width > 0 else { return nil }
-        let point = recognizer.location(in: self)
-        if recognizer.state == .began || recognizer is UITapGestureRecognizer {
-            guard imageRect.contains(point) else { return nil }
-        }
-        return CGPoint(x: max(0, min(image.size.width - 1, (point.x - imageRect.minX) / imageRect.width * image.size.width)),
-                       y: max(0, min(image.size.height - 1, (point.y - imageRect.minY) / imageRect.height * image.size.height)))
+        let requireInside = recognizer.state == .began || recognizer is UITapGestureRecognizer
+        return framebufferPoint(recognizer.location(in: self), clamp: !requireInside)
     }
     @objc private func tap(_ gesture: UITapGestureRecognizer) {
         guard let point = remote(gesture) else { return }
@@ -156,8 +206,94 @@ final class RemoteCanvas: UIView {
             scrollOrigin = gesture.translation(in: self).y
         }
     }
+    private var heldButtons: UInt8 {
+        let raw = pointerPresses.reduce(0) { partial, press in
+            guard press.state == .began || press.state == .changed else { return partial }
+            return partial | press.requiredButton.rawValue
+        }
+        return PointerButtons.mask(uiButtonMask: raw)
+    }
+    @objc private func hover(_ gesture: UIHoverGestureRecognizer) {
+        guard gesture.state == .began || gesture.state == .changed, heldButtons == 0 else { return }
+        guard let point = framebufferPoint(gesture.location(in: self), clamp: false) else { return }
+        emit(point, PointerButtons.none)
+    }
+    @objc private func pointerPress(_ gesture: PointerPressRecognizer) {
+        switch gesture.state {
+        case .began, .changed:
+            guard let point = remote(gesture) else { return }
+            claimPointerClick()
+            gesture.deliveredDown = true
+            let required = PointerButtons.mask(uiButtonMask: gesture.requiredButton.rawValue)
+            let reported = PointerButtons.mask(uiButtonMask: gesture.buttonMask.rawValue)
+            emit(point, heldButtons | (reported & required))
+        case .ended, .cancelled, .failed:
+            let delivered = gesture.deliveredDown
+            if delivered, let point = remote(gesture) ?? lastPoint {
+                emit(point, heldButtons)
+            }
+            gesture.deliveredDown = false
+            // Only the press that actually sent a button may clear the tap guard.
+            // A second button that fails must not drop a click still in progress.
+            guard delivered else { return }
+            let generation = suppressGeneration
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.suppressGeneration == generation else { return }
+                self.suppressPointerTap = false
+            }
+        default:
+            break
+        }
+    }
+    @objc private func pointerTap(_ gesture: UITapGestureRecognizer) {
+        guard gesture.state == .ended, !suppressPointerTap else { return }
+        guard let point = framebufferPoint(gesture.location(in: self), clamp: false) else { return }
+        click(point, button: PointerButtons.mask(uiButtonMask: gesture.buttonMaskRequired.rawValue))
+    }
+    @objc private func wheel(_ gesture: UIPanGestureRecognizer) {
+        guard gesture.state == .began || gesture.state == .changed || gesture.state == .ended || gesture.state == .cancelled else { return }
+        if gesture.state == .began {
+            wheelPendingX = 0
+            wheelPendingY = 0
+        }
+        let translation = gesture.translation(in: self)
+        wheelPendingX += Double(translation.x)
+        wheelPendingY += Double(translation.y)
+        gesture.setTranslation(.zero, in: self)
+        let finishing = gesture.state == .ended || gesture.state == .cancelled
+        let ticks = PointerScroll.ticks(deltaX: wheelPendingX, deltaY: wheelPendingY, held: heldButtons, flushRemainder: finishing)
+        guard !ticks.masks.isEmpty else { return }
+        guard let point = framebufferPoint(gesture.location(in: self), clamp: false) ?? lastPoint else { return }
+        wheelPendingX -= ticks.consumedX
+        wheelPendingY -= ticks.consumedY
+        for mask in ticks.masks { emit(point, mask) }
+    }
+    private func claimPointerClick() {
+        suppressPointerTap = true
+        suppressGeneration += 1
+    }
+    private func emit(_ point: CGPoint, _ buttons: UInt8) {
+        lastPoint = point
+        pointer?(point, buttons)
+    }
     private func click(_ point: CGPoint, button: UInt8) {
-        for mask in PointerButtons.click(button) { pointer?(point, mask) }
+        for mask in PointerButtons.click(button) { emit(point, mask) }
+    }
+    func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive event: UIEvent) -> Bool {
+        guard let press = gestureRecognizer as? PointerPressRecognizer else { return true }
+        return event.buttonMask.contains(press.requiredButton)
+    }
+    func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
+        // Scroll events are not touches. Rejecting touches here keeps the wheel pan from delaying a finger drag.
+        if let pan = gestureRecognizer as? UIPanGestureRecognizer, pan.maximumNumberOfTouches == 0 { return false }
+        if gestureRecognizer is PointerPressRecognizer { return touch.type == .indirectPointer }
+        return true
+    }
+    func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool {
+        pointerRecognizers.contains { $0 === gestureRecognizer } && pointerRecognizers.contains { $0 === other }
+    }
+    func pointerInteraction(_ interaction: UIPointerInteraction, styleFor region: UIPointerRegion) -> UIPointerStyle? {
+        UIPointerStyle.hidden()
     }
     override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
         guard capture().forwardsToRemote else { super.pressesBegan(presses, with: event); return }
@@ -210,7 +346,30 @@ final class SecondaryClickRecognizer: UILongPressGestureRecognizer {
     }
     private func failIfAnotherFinger(_ event: UIEvent) {
         guard state == .possible, let view else { return }
-        let active = event.touches(for: view)?.filter { $0.phase != .ended && $0.phase != .cancelled }.count ?? 0
+        // A connected mouse is not a second finger, so it must not cancel a touch long-press.
+        let active = event.touches(for: view)?.filter {
+            $0.phase != .ended && $0.phase != .cancelled && $0.type != .indirectPointer
+        }.count ?? 0
         if active > numberOfTouchesRequired { state = .failed }
+    }
+}
+
+/// One physical button, from the moment it goes down through the drag until it comes up.
+final class PointerPressRecognizer: UILongPressGestureRecognizer {
+    let requiredButton: UIEvent.ButtonMask
+    var deliveredDown = false
+    init(requiredButton: UIEvent.ButtonMask, target: Any?, action: Selector?) {
+        self.requiredButton = requiredButton
+        super.init(target: target, action: action)
+        minimumPressDuration = 0
+        allowableMovement = .greatestFiniteMagnitude
+        allowedTouchTypes = [NSNumber(value: UITouch.TouchType.indirectPointer.rawValue)]
+    }
+    override func shouldReceive(_ event: UIEvent) -> Bool {
+        super.shouldReceive(event) && event.buttonMask.contains(requiredButton)
+    }
+    override func reset() {
+        deliveredDown = false
+        super.reset()
     }
 }
