@@ -409,33 +409,21 @@ struct RemoteView: View {
             Text(rotationAlertText)
         }
     }
+    /// One stable row. ViewThatFits kept remeasuring this bar while the resolution sheet changed the proposal and never finished layout.
     private var sessionControls: some View {
-        ViewThatFits(in: .horizontal) {
-            controlRow(placesKeyboardFirst: true)
-            VStack(alignment: .leading, spacing: 2) {
-                controlRow(placesKeyboardFirst: true, showsOtherControls: false)
-                controlRow(placesKeyboardFirst: false, showsKeyboard: false)
+        HStack(spacing: 8) {
+            keyboardControl.fixedSize(horizontal: true, vertical: false)
+            controlButton(SessionControls.input, label: "입력기 전환", action: switchInput)
+            Spacer(minLength: 4)
+            controlButton(SessionControls.resolution, label: "해상도") {
+                session.display.cancelPendingRotation()
+                displaySettings = true
             }
+            controlButton(SessionControls.orientation(macIsPortrait: session.display.portrait), label: session.display.portrait ? "가로 모드" : "세로 모드", action: togglePortrait)
         }
         .font(.caption)
         .padding(.horizontal, 12)
         .padding(.vertical, 4)
-    }
-    /// The keyboard control leads the row, and its title stays "키보드" so opening the panel does not widen it off the screen.
-    private func controlRow(placesKeyboardFirst: Bool, showsKeyboard: Bool = true, showsOtherControls: Bool = true) -> some View {
-        HStack(spacing: 8) {
-            if showsKeyboard && placesKeyboardFirst { keyboardControl.layoutPriority(1).fixedSize(horizontal: true, vertical: false) }
-            if showsOtherControls {
-                controlButton(SessionControls.input, label: "입력기 전환", action: switchInput)
-                Spacer(minLength: 4)
-                controlButton(SessionControls.resolution, label: "해상도") {
-                    session.display.cancelPendingRotation()
-                    displaySettings = true
-                }
-                controlButton(SessionControls.orientation(macIsPortrait: session.display.portrait), label: session.display.portrait ? "가로 모드" : "세로 모드", action: togglePortrait)
-            }
-            if showsKeyboard && !placesKeyboardFirst { keyboardControl.layoutPriority(1).fixedSize(horizontal: true, vertical: false) }
-        }
     }
     private var keyboardControl: some View {
         controlButton(SessionControls.keyboard, label: keyboard ? "키보드 숨기기" : "키보드 표시") { keyboard.toggle() }

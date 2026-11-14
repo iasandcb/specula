@@ -15,12 +15,6 @@ final class DisplayController: ObservableObject {
     private var token: String?
     private var heartbeat: Task<Void, Never>?
     private var active = false
-    private let network: URLSession = {
-        let configuration = URLSessionConfiguration.ephemeral
-        configuration.timeoutIntervalForRequest = 8
-        configuration.timeoutIntervalForResource = 10
-        return URLSession(configuration: configuration)
-    }()
 
     func configure(host: String) {
         self.host = host; token = readToken(host: host); paired = token != nil
@@ -37,7 +31,7 @@ final class DisplayController: ObservableObject {
         portrait = false
         guard token != nil else { return }
         let host = self.host, token = self.token
-        Task { try? await request(path: "/restore", body: Data("{}".utf8), host: host, token: token) }
+        Task { try? await Self.request(path: "/restore", body: Data("{}".utf8), host: host, token: token, timeout: DisplayHTTP.listTimeout) }
     }
     private func startHeartbeat() {
         heartbeat?.cancel()
@@ -46,7 +40,7 @@ final class DisplayController: ObservableObject {
             while !Task.isCancelled {
                 guard let self else { return }
                 do {
-                    _ = try await self.request(path: "/heartbeat", body: Data("{}".utf8))
+                    _ = try await Self.request(path: "/heartbeat", body: Data("{}".utf8), host: self.host, token: self.token, timeout: DisplayHTTP.listTimeout)
                     try await Task.sleep(nanoseconds: 15_000_000_000)
                 } catch is CancellationError { return }
                 catch {
@@ -58,7 +52,7 @@ final class DisplayController: ObservableObject {
     }
     func pair(code: String) async {
         await perform {
-            let result = try await self.request(path: "/pair", body: JSONEncoder().encode(PairDisplayRequest(code: code)))
+            let result = try await Self.request(path: "/pair", body: JSONEncoder().encode(PairDisplayRequest(code: code)), host: self.host, token: nil, timeout: DisplayHTTP.listTimeout)
             let response = try JSONDecoder().decode(PairDisplayResponse.self, from: result)
             try self.saveToken(response.token)
             self.token = response.token; self.paired = true; self.startHeartbeat()
@@ -70,12 +64,12 @@ final class DisplayController: ObservableObject {
     }
     func refresh() async { await perform { try await self.load() } }
     private func load() async throws {
-        snapshot = try JSONDecoder().decode(DisplaySnapshot.self, from: await request(path: "/modes"))
+        snapshot = try JSONDecoder().decode(DisplaySnapshot.self, from: await Self.request(path: "/modes", host: host, token: token, timeout: DisplayHTTP.listTimeout))
     }
     func change(_ id: UInt32) async {
         guard active else { error = "먼저 맥에 접속해 주세요."; return }
         await perform {
-            let data = try await self.request(path: "/mode", body: JSONEncoder().encode(ChangeDisplayRequest(modeID: id)))
+            let data = try await Self.request(path: "/mode", body: JSONEncoder().encode(ChangeDisplayRequest(modeID: id)), host: host, token: token, timeout: DisplayHTTP.listTimeout)
             self.snapshot = try JSONDecoder().decode(DisplaySnapshot.self, from: data)
             self.preferredModeID = id
         }
@@ -95,11 +89,11 @@ final class DisplayController: ObservableObject {
     }
     private func rotateMainDisplay() async {
         await perform {
-            let current = try JSONDecoder().decode(DisplayRotation.self, from: await self.request(path: "/rotation"))
+            let current = try JSONDecoder().decode(DisplayRotation.self, from: await Self.request(path: "/rotation", host: host, token: token, timeout: DisplayHTTP.rotationTimeout))
             let next = DisplayRotationAngle.portraitToggle(from: current.degrees)
             self.attemptedRotation = next
             let body = try JSONEncoder().encode(SetDisplayRotation(degrees: next))
-            let updated = try JSONDecoder().decode(DisplayRotation.self, from: await self.request(path: "/rotation", body: body))
+            let updated = try JSONDecoder().decode(DisplayRotation.self, from: await Self.request(path: "/rotation", body: body, host: host, token: token, timeout: DisplayHTTP.rotationTimeout))
             guard updated.supported else { throw RFBError.invalid("이 디스플레이의 화면을 회전하지 못했습니다.") }
             self.portrait = DisplayOrientationCheck.isPortrait(updated.degrees)
         }
@@ -110,13 +104,13 @@ final class DisplayController: ObservableObject {
     }
     private func refreshRotation() async {
         guard paired else { return }
-        guard let data = try? await request(path: "/rotation"),
+        guard let data = try? await Self.request(path: "/rotation", host: host, token: token, timeout: DisplayHTTP.listTimeout),
               let value = try? JSONDecoder().decode(DisplayRotation.self, from: data) else { return }
         portrait = DisplayOrientationCheck.isPortrait(value.degrees)
     }
     func restore() async {
         await perform {
-            let data = try await self.request(path: "/restore", body: Data("{}".utf8))
+            let data = try await Self.request(path: "/restore", body: Data("{}".utf8), host: host, token: token, timeout: DisplayHTTP.rotationTimeout)
             self.snapshot = try JSONDecoder().decode(DisplaySnapshot.self, from: data)
             self.preferredModeID = nil
         }
@@ -128,16 +122,15 @@ final class DisplayController: ObservableObject {
         do { try await action() }
         catch { self.error = error.localizedDescription }
     }
-    @discardableResult
-    private func request(path: String, body: Data? = nil, host overrideHost: String? = nil, token overrideToken: String? = nil) async throws -> Data {
-        let host = overrideHost ?? self.host
+    /// URLSession work stays off the main actor. The delegate queue is not the main queue.
+    private nonisolated static func request(path: String, body: Data? = nil, host: String, token: String?, timeout: TimeInterval) async throws -> Data {
         var components = URLComponents(); components.scheme = "http"; components.host = host; components.port = 5901; components.path = path
         guard let url = components.url else { throw RFBError.invalid("맥 주소를 확인해 주세요.") }
-        var request = URLRequest(url: url)
+        var request = URLRequest(url: url, timeoutInterval: timeout)
         request.httpMethod = body == nil ? "GET" : "POST"; request.httpBody = body
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        if let token = overrideToken ?? self.token { request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
-        let (data, response) = try await network.data(for: request)
+        if let token { request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
+        let (data, response) = try await DisplayHTTPSession.data(for: request)
         guard let response = response as? HTTPURLResponse, response.statusCode == 200 else {
             let failure = try? JSONDecoder().decode(DisplayFailure.self, from: data)
             throw RFBError.invalid(failure?.message ?? "맥의 해상도 보조 앱에 연결할 수 없습니다.")
@@ -159,6 +152,24 @@ final class DisplayController: ObservableObject {
         var item = query; item[kSecValueData as String] = Data(value.utf8)
         item[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
         guard SecItemAdd(item as CFDictionary, nil) == errSecSuccess else { throw RFBError.invalid("연결 정보를 안전하게 저장하지 못했습니다.") }
+    }
+}
+
+private enum DisplayHTTPSession {
+    static let session: URLSession = {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.timeoutIntervalForRequest = DisplayHTTP.listTimeout
+        configuration.timeoutIntervalForResource = DisplayHTTP.rotationTimeout + 1
+        configuration.waitsForConnectivity = false
+        let queue = OperationQueue()
+        queue.name = "specula.display.http"
+        queue.maxConcurrentOperationCount = 1
+        queue.qualityOfService = .userInitiated
+        return URLSession(configuration: configuration, delegate: nil, delegateQueue: queue)
+    }()
+
+    static func data(for request: URLRequest) async throws -> (Data, URLResponse) {
+        try await session.data(for: request)
     }
 }
 
@@ -196,36 +207,43 @@ struct DisplaySettingsView: View {
                         Button("연결", action: submitCode)
                             .disabled(code.count != 6 || controller.busy)
                     }
-                } else {
-                    if let snapshot = controller.snapshot {
-                        Section {
-                            Text("현재: \(snapshot.current.title)")
-                            Text("접속 종료 시 원래대로 복원합니다. 연결이 끊기면 약 1분 이내에 복원합니다.").font(.footnote).foregroundStyle(.secondary)
-                            Button("원래 해상도로 복원") { Task { await controller.restore() } }
-                        }
-                        Section {
-                            // The helper already chose the modes, including widths under 800. Apply the mode id as sent.
-                            ForEach(snapshot.modes) { mode in
-                                Button { Task { await controller.change(mode.id) } } label: {
-                                    HStack {
-                                        VStack(alignment: .leading) {
-                                            Text(mode.title)
-                                            Text("전송 \(mode.pixelWidth) × \(mode.pixelHeight) 픽셀").font(.caption).foregroundStyle(.secondary)
-                                        }
-                                        Spacer()
-                                        if mode.id == snapshot.current.id { Image(systemName: "checkmark") }
-                                    }
-                                }.disabled(controller.busy)
-                            }
-                        } header: { Text("맥 화면 해상도") } footer: {
-                            Text("작은 해상도는 글자와 버튼을 크게 표시합니다. 1280 × 720 또는 1600 × 900부터 시험해 보세요. 맥 화면에도 적용됩니다.")
-                        }
+                } else if let snapshot = controller.snapshot {
+                    Section {
+                        Text("현재: \(snapshot.current.title)")
+                        Text("접속 종료 시 원래대로 복원합니다. 연결이 끊기면 약 1분 이내에 복원합니다.").font(.footnote).foregroundStyle(.secondary)
+                        Button("원래 해상도로 복원") { Task { await controller.restore() } }
                     }
+                    Section {
+                        // The helper already chose the modes, including widths under 800. Apply the mode id as sent.
+                        ForEach(snapshot.modes) { mode in
+                            Button { Task { await controller.change(mode.id) } } label: {
+                                HStack {
+                                    VStack(alignment: .leading) {
+                                        Text(mode.title)
+                                        Text("전송 \(mode.pixelWidth) × \(mode.pixelHeight) 픽셀").font(.caption).foregroundStyle(.secondary)
+                                    }
+                                    Spacer()
+                                    if mode.id == snapshot.current.id { Image(systemName: "checkmark") }
+                                }
+                            }.disabled(controller.busy)
+                        }
+                    } header: { Text("맥 화면 해상도") } footer: {
+                        Text("작은 해상도는 글자와 버튼을 크게 표시합니다. 1280 × 720 또는 1600 × 900부터 시험해 보세요. 맥 화면에도 적용됩니다.")
+                    }
+                    if controller.busy { ProgressView("불러오는 중…") }
                     Button("목록 새로 고침") { Task { await controller.refresh() } }.disabled(controller.busy)
                     Button("연결 코드 다시 입력") { controller.resetPairing() }
+                    if !controller.error.isEmpty { Text(controller.error).foregroundStyle(.red) }
+                } else {
+                    Section {
+                        ProgressView()
+                        Text(controller.error.isEmpty ? "해상도 목록을 불러오는 중…" : controller.error)
+                            .foregroundStyle(controller.error.isEmpty ? Color.secondary : Color.red)
+                        if !controller.error.isEmpty {
+                            Button("다시 시도") { Task { await controller.refresh() } }.disabled(controller.busy)
+                        }
+                    }
                 }
-                if controller.busy { ProgressView() }
-                if !controller.error.isEmpty { Text(controller.error).foregroundStyle(.red) }
             }
             .navigationTitle("맥 해상도")
             .toolbar { Button("완료") { dismiss() } }
