@@ -163,6 +163,7 @@ struct DisplaySettingsView: View {
                             Button("원래 해상도로 복원") { Task { await controller.restore() } }
                         }
                         Section {
+                            // The helper already chose the modes, including widths under 800. Apply the mode id as sent.
                             ForEach(snapshot.modes) { mode in
                                 Button { Task { await controller.change(mode.id) } } label: {
                                     HStack {

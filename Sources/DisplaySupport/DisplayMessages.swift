@@ -12,6 +12,28 @@ public struct RemoteDisplayMode: Codable, Identifiable, Sendable {
     }
     public var title: String { "\(width) × \(height)" + (pixelWidth > width ? " · Retina" : "") }
 }
+/// Modes offered to the phone. Every desktop-GUI mode is eligible, including 640×480, until the pixel cap.
+public enum DisplayModes {
+    public static let maxPixels = 6016 * 3384
+
+    public static func offered(_ modes: [RemoteDisplayMode]) -> [RemoteDisplayMode] {
+        var seen = Set<String>()
+        return modes.filter(fits).sorted { a, b in
+            if a.width != b.width { return a.width < b.width }
+            if a.height != b.height { return a.height < b.height }
+            if a.pixelWidth != b.pixelWidth { return a.pixelWidth < b.pixelWidth }
+            if a.pixelHeight != b.pixelHeight { return a.pixelHeight < b.pixelHeight }
+            return a.id < b.id
+        }.filter { seen.insert("\($0.width)x\($0.height)x\($0.pixelWidth)x\($0.pixelHeight)").inserted }
+    }
+
+    public static func fits(_ mode: RemoteDisplayMode) -> Bool {
+        mode.width > 0 && mode.height > 0 && mode.pixelWidth > 0 && mode.pixelHeight > 0
+            && mode.pixelWidth <= maxPixels && mode.pixelHeight <= maxPixels
+            && mode.pixelWidth * mode.pixelHeight <= maxPixels
+    }
+}
+
 public struct DisplaySnapshot: Codable, Sendable {
     public let current: RemoteDisplayMode
     public let modes: [RemoteDisplayMode]

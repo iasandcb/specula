@@ -31,6 +31,22 @@ final class DisplayLeaseTests: XCTestCase {
         XCTAssertNil(lease.originalModeID); XCTAssertNil(lease.expiresAt)
         XCTAssertFalse(lease.expired(now: now.addingTimeInterval(120)))
     }
+    func testResolutionListKeepsLowModesAndBothPixelDensities() {
+        let modes = [
+            RemoteDisplayMode(id: 7, width: 1920, height: 1080, pixelWidth: 1920, pixelHeight: 1080),
+            RemoteDisplayMode(id: 5, width: 1280, height: 800, pixelWidth: 1280, pixelHeight: 800),
+            RemoteDisplayMode(id: 1, width: 640, height: 480, pixelWidth: 640, pixelHeight: 480),
+            RemoteDisplayMode(id: 4, width: 1280, height: 800, pixelWidth: 2560, pixelHeight: 1600),
+            RemoteDisplayMode(id: 3, width: 1280, height: 800, pixelWidth: 1280, pixelHeight: 800),
+            RemoteDisplayMode(id: 2, width: 720, height: 450, pixelWidth: 720, pixelHeight: 450),
+            RemoteDisplayMode(id: 6, width: 8000, height: 5000, pixelWidth: 8000, pixelHeight: 5000),
+            RemoteDisplayMode(id: 8, width: 0, height: 480, pixelWidth: 640, pixelHeight: 480)
+        ]
+        XCTAssertEqual(DisplayModes.offered(modes).map(\.id), [1, 2, 3, 4, 7])
+        XCTAssertEqual(DisplayModes.offered(modes).map(\.title), ["640 × 480", "720 × 450", "1280 × 800", "1280 × 800 · Retina", "1920 × 1080"])
+        XCTAssertTrue(DisplayModes.fits(RemoteDisplayMode(id: 9, width: 6016, height: 3384, pixelWidth: 6016, pixelHeight: 3384)))
+        XCTAssertFalse(DisplayModes.fits(RemoteDisplayMode(id: 10, width: 8192, height: 8192, pixelWidth: 8192, pixelHeight: 8192)))
+    }
     func testResolutionReturnsOnlyOnAutomaticReconnect() {
         XCTAssertEqual(DisplayReconnect.mode(reconnecting: true, selected: 42), 42)
         XCTAssertNil(DisplayReconnect.mode(reconnecting: false, selected: 42))
