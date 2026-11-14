@@ -71,6 +71,8 @@ private fun Specula(model: SessionModel = viewModel()) {
             )
             // Four equal touch targets stay in one row. The input-source label has a fixed line
             // break.
+            val landscape = androidx.compose.ui.platform.LocalConfiguration.current.orientation ==
+                android.content.res.Configuration.ORIENTATION_LANDSCAPE
             Row(
                 Modifier.fillMaxWidth().padding(horizontal = 4.dp),
                 horizontalArrangement = Arrangement.spacedBy(4.dp),
@@ -80,13 +82,13 @@ private fun Specula(model: SessionModel = viewModel()) {
                     TextButton(
                         onClick = action,
                         enabled = enabled,
-                        modifier = Modifier.weight(1f).heightIn(min = 72.dp).widthIn(min = 48.dp),
+                        modifier = Modifier.weight(1f).heightIn(min = if (landscape) 48.dp else 72.dp).widthIn(min = 48.dp),
                         contentPadding = PaddingValues(2.dp),
                     ) {
                         Text(
                             title,
                             fontSize = 18.sp,
-                            maxLines = 2,
+                            maxLines = if (landscape) 1 else 2,
                             textAlign = androidx.compose.ui.text.style.TextAlign.Center,
                         )
                     }
@@ -95,7 +97,7 @@ private fun Specula(model: SessionModel = viewModel()) {
                     keyboard = !keyboard
                     surface?.showKeyboard(keyboard)
                 }
-                Control("⌃Space\n입력기") { model.inputSource() }
+                Control(if (landscape) "⌃Space 입력기" else "⌃Space\n입력기") { model.inputSource() }
                 Control("해상도", !model.busy) {
                     surface?.showKeyboard(false)
                     keyboard = false
