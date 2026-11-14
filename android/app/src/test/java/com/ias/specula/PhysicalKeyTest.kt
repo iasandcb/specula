@@ -72,13 +72,4 @@ class PhysicalKeyTest {
         assertNull(PhysicalKey.fromKeyCode(KeyEvent.KEYCODE_UNKNOWN))
     }
 
-    @Test
-    fun commandTabPressesAndReleasesInOrder() {
-        val events = mutableListOf<Pair<Int, Boolean>>()
-        PhysicalKey.commandTab { symbol, down -> events.add(symbol to down) }
-        assertEquals(
-            listOf(0xffeb to true, 0xff09 to true, 0xff09 to false, 0xffeb to false),
-            events,
-        )
-    }
 }

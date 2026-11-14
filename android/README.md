@@ -69,8 +69,10 @@ the helper. The helper is optional for remote viewing and input.
 - The bottom toolbar has five controls in one row, each at least 48dp wide.
   Landscape uses one-line labels and a 48dp height; portrait permits two-line
   labels and uses a 72dp height. Narrow windows can scroll the row. **세로** /
-  **가로** names the next orientation. **⌘Tab** sends Command-down, Tab-down/up,
-  Command-up to switch Mac apps.
+  **가로** names the next orientation. **⌘Tab** holds Command and sends Tab after a 40 ms modifier gap to show the
+  Mac app switcher. The highlighted button sends another Tab on each further tap.
+  Touching the remote screen, using another toolbar control, pressing hardware
+  Enter/Escape, backgrounding the app, or disconnecting releases Command.
 - **키보드** toggles the Android IME. Soft-keyboard composition stays local until
   `commitText`; committed text and virtual Enter/backspace go to the Mac.
   Physical keyboard events are consumed in `onKeyPreIme` before Android's IME,

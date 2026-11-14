@@ -1,11 +1,13 @@
 package com.ias.specula
 
 import android.os.Bundle
+import android.view.KeyEvent
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.LocalActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.viewModels
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
@@ -14,6 +16,8 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.text.input.*
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -24,6 +28,30 @@ import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.viewmodel.compose.viewModel
 
 class MainActivity : ComponentActivity() {
+    private val session: SessionModel by viewModels()
+    private val switcherDismissKeys = mutableSetOf<Int>()
+
+    override fun onStop() {
+        session.commandTab.release()
+        super.onStop()
+    }
+
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        val dismissKey = event.keyCode == KeyEvent.KEYCODE_ENTER ||
+            event.keyCode == KeyEvent.KEYCODE_NUMPAD_ENTER || event.keyCode == KeyEvent.KEYCODE_ESCAPE
+        if (event.action == KeyEvent.ACTION_DOWN && dismissKey && session.commandTab.held) {
+            session.commandTab.release()
+            switcherDismissKeys.add(event.keyCode)
+        }
+        // Consume both halves so Enter cannot reactivate a focused toolbar button,
+        // or reach the selected Mac app with no matching key-down.
+        if (event.keyCode in switcherDismissKeys) {
+            if (event.action == KeyEvent.ACTION_UP) switcherDismissKeys.remove(event.keyCode)
+            return true
+        }
+        return super.dispatchKeyEvent(event)
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
@@ -58,6 +86,7 @@ private fun Specula(model: SessionModel = viewModel()) {
                 factory = { context ->
                     RemoteSurface(context).also {
                         surface = it
+                        it.onRemoteTouch = model.commandTab::release
                         it.pointer = model::pointer
                         it.key = model::key
                         it.text = model::text
@@ -87,12 +116,23 @@ private fun Specula(model: SessionModel = viewModel()) {
                         title: String,
                         enabled: Boolean = true,
                         weight: Float = 1f,
+                        appSwitcher: Boolean = false,
                         action: () -> Unit,
                     ) {
                         TextButton(
-                            onClick = action,
+                            onClick = {
+                                if (!appSwitcher) model.commandTab.release()
+                                action()
+                            },
                             enabled = enabled,
-                            modifier = Modifier.weight(weight)
+                            colors = ButtonDefaults.textButtonColors(
+                                containerColor = if (appSwitcher && model.commandTab.held)
+                                    MaterialTheme.colorScheme.primaryContainer
+                                else androidx.compose.ui.graphics.Color.Transparent,
+                            ),
+                            modifier = Modifier.semantics {
+                                if (appSwitcher) selected = model.commandTab.held
+                            }.weight(weight)
                                 .height(if (landscape) 48.dp else 72.dp)
                                 .widthIn(min = 48.dp),
                             contentPadding = PaddingValues(2.dp),
@@ -113,7 +153,7 @@ private fun Specula(model: SessionModel = viewModel()) {
                         if (landscape) "⌃Space 입력기" else "⌃Space\n입력기",
                         weight = 2f,
                     ) { model.inputSource() }
-                    Control("⌘Tab") { PhysicalKey.commandTab(model::key) }
+                    Control("⌘Tab", appSwitcher = true) { model.commandTab.tap() }
                     Control("해상도", !model.busy) {
                         surface?.showKeyboard(false)
                         keyboard = false

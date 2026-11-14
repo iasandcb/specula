@@ -7,13 +7,6 @@ object PhysicalKey {
     const val COMMAND = 0xffeb // Super_L, matching the Swift Command button.
     const val OPTION = 0xffe7 // Meta_L: Apple Screen Sharing interprets this as Option.
 
-    fun commandTab(send: (Int, Boolean) -> Unit) {
-        send(COMMAND, true)
-        send(0xff09, true)
-        send(0xff09, false)
-        send(COMMAND, false)
-    }
-
     /** Android physical positions, independent of Android's layout, Unicode and composing IME. */
     fun fromKeyCode(keyCode: Int, shift: Boolean = false, option: Boolean = false): Int? {
         // Alt+Tab and Meta+Tab are intercepted by Android and cannot be received by the app.

@@ -20,6 +20,7 @@ class RemoteSurface(context: Context) : View(context) {
             invalidate()
         }
 
+    var onRemoteTouch: () -> Unit = {}
     var pointer: (Int, Int, Int) -> Unit = { _, _, _ -> }
     var key: (Int, Boolean) -> Unit = { _, _ -> }
     var text: (String) -> Unit = {}
@@ -88,6 +89,7 @@ class RemoteSurface(context: Context) : View(context) {
     override fun onTouchEvent(e: MotionEvent): Boolean {
         when (e.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
+                onRemoteTouch()
                 requestFocus()
                 downX = e.x
                 downY = e.y

@@ -27,7 +27,11 @@ class SessionModel(app: Application) : AndroidViewModel(app) {
     private var connection: Job? = null
     private var heartbeat: Job? = null
     private var rotationAfterPairing = false
-    private val events = Channel<Pair<RfbClient, (RfbClient) -> Unit>>(Channel.UNLIMITED)
+    private val events = Channel<Pair<RfbClient, suspend (RfbClient) -> Unit>>(Channel.UNLIMITED)
+
+    val commandTab = CommandTab(::key) { milliseconds ->
+        client?.let { target -> events.trySend(target to { delay(milliseconds) }) }
+    }
 
     init {
         viewModelScope.launch {
@@ -125,6 +129,7 @@ class SessionModel(app: Application) : AndroidViewModel(app) {
                         e.message?.takeIf { it.any { c -> c in '가'..'힣' } }
                             ?: "맥에 연결할 수 없습니다. 주소와 화면 공유 설정을 확인해 주세요."
                 } finally {
+                    commandTab.release()
                     rfb.close()
                     connecting = false
                     connected = false
@@ -156,9 +161,14 @@ class SessionModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun disconnect() {
-        client?.close()
-        connection?.cancel()
-        client = null
+        commandTab.release()
+        val target = client ?: return
+        val job = connection
+        // Drain the ordered modifier release before closing the socket.
+        events.trySend(target to {
+            it.close()
+            job?.cancel()
+        })
     }
 
     private suspend fun action(block: suspend () -> Unit) {
