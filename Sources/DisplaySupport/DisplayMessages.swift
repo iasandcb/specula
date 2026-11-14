@@ -93,6 +93,28 @@ public enum DisplayOrientationCheck {
 public enum DisplayHTTP {
     public static let listTimeout: TimeInterval = 3
     public static let rotationTimeout: TimeInterval = 6
+    public static let connectionLost = "해상도 보조 앱과의 연결이 끊겼습니다. 변경한 해상도는 약 1분 이내에 복원됩니다."
+    public static let unreachable = "맥의 해상도 보조 앱에 연결할 수 없습니다."
+
+    /// 401 means the bearer is missing or stale. That is the pairing-code screen, not a dropped helper.
+    /// A 401 from the pairing request itself is a wrong code and keeps its message.
+    public static func interpret(status: Int?, body: Data, isPairing: Bool) -> Result<Data, DisplayCallError> {
+        if status == 200 { return .success(body) }
+        let message = (try? JSONDecoder().decode(DisplayFailure.self, from: body))?.message ?? unreachable
+        if status == 401, !isPairing { return .failure(.pairingRequired) }
+        return .failure(.message(message))
+    }
+}
+
+public enum DisplayCallError: Error, Equatable, Sendable, LocalizedError {
+    case pairingRequired
+    case message(String)
+    public var errorDescription: String? {
+        switch self {
+        case .pairingRequired: return "맥의 연결 코드로 다시 연결해 주세요."
+        case .message(let message): return message
+        }
+    }
 }
 
 /// Which mechanism may rotate the main display.
