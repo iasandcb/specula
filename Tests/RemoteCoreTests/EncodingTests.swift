@@ -14,6 +14,18 @@ final class EncodingTests: XCTestCase {
         XCTAssertLessThan(enabled.firstIndex(of: RFBEncodings.copyRect)!, enabled.firstIndex(of: RFBEncodings.raw)!)
         XCTAssertTrue(enabled.contains(RFBEncodings.cursor))
         XCTAssertEqual(RectangleFailure.message(encoding: 16, x: 0, y: 64, width: 64, height: 64, underlying: "팔레트"), "화면 데이터 오류 · 인코딩 16 · 0,64 64×64: 팔레트")
+        XCTAssertEqual(RFBEncodings.setEncodingsMessage(), RFBEncodings.setEncodingsMessage(encodings: RFBEncodings.advertised()))
+        XCTAssertEqual(RFBEncodings.parse(list: "zrle,cursor,copyrect,raw,desktop-size,last_rect"), [
+            RFBEncodings.zrle, RFBEncodings.cursor, RFBEncodings.copyRect, RFBEncodings.raw, RFBEncodings.desktopSize, RFBEncodings.lastRect
+        ])
+        XCTAssertEqual(RFBEncodings.parse(list: "0x10,-239,-0xEF"), [16, -239, -239])
+        XCTAssertEqual(
+            RFBEncodings.setEncodingsMessage(encodings: [RFBEncodings.cursor]),
+            RFBEncodings.setEncodingsMessage(encodings: [-239])
+        )
+        XCTAssertNil(RFBEncodings.parse(list: ""))
+        XCTAssertNil(RFBEncodings.parse(list: "zrle,,raw"))
+        XCTAssertNil(RFBEncodings.parse(list: "hextile"))
     }
 
     func testCopyRectOverlappingScrollUsesTheOriginalPixels() throws {
@@ -97,7 +109,10 @@ final class EncodingTests: XCTestCase {
 
         XCTAssertThrowsError(try ZRLERect.decode(width: 1, height: 1, uncompressed: Data([127, 0]))) { error in
             XCTAssertEqual(error.localizedDescription, "재사용할 ZRLE 팔레트가 없습니다.")
+            XCTAssertEqual((error as? ZRLEDecodeError)?.offset, 1)
         }
+        let reuseWithoutPalette = Data([0x78, 0x9c, 0xab, 0x07, 0x00, 0x00, 0x80, 0x00, 0x80])
+        XCTAssertEqual(try InflateStream().inflate(reuseWithoutPalette), Data([127]))
     }
 
     func testCompressedZRLEFixturesRoundTrip() throws {

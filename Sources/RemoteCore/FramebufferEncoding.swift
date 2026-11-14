@@ -23,11 +23,53 @@ public enum RFBEncodings {
     }
 
     public static func setEncodingsMessage(enableZRLE: Bool = false, enableCursor: Bool = false) -> Data {
-        let values = advertised(enableZRLE: enableZRLE, enableCursor: enableCursor)
+        setEncodingsMessage(encodings: advertised(enableZRLE: enableZRLE, enableCursor: enableCursor))
+    }
+
+    /// Same SetEncodings body the app sends. Values are 32-bit on the wire; negative numbers are pseudo-encodings.
+    public static func setEncodingsMessage(encodings: [Int]) -> Data {
         var bytes: [UInt8] = [2, 0]
-        bytes.append(contentsOf: Wire.u16(values.count))
-        for value in values { bytes.append(contentsOf: Wire.u32(UInt32(value))) }
+        bytes.append(contentsOf: Wire.u16(encodings.count))
+        for value in encodings { bytes.append(contentsOf: Wire.u32(UInt32(truncatingIfNeeded: value))) }
         return Data(bytes)
+    }
+
+    /// `raw`, `copyrect`, `zrle`, `cursor`, `desktopsize`, `lastrect`, or a decimal / `0x` number.
+    /// Hyphens and underscores in names are ignored. Order is preserved.
+    public static func parse(list: String) -> [Int]? {
+        let tokens = list.split(separator: ",", omittingEmptySubsequences: false).map {
+            $0.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        guard (1...32).contains(tokens.count) else { return nil }
+        var values: [Int] = []
+        for token in tokens {
+            let key = token.lowercased().filter { $0 != "-" && $0 != "_" }
+            if let known = names[key] {
+                values.append(known)
+                continue
+            }
+            guard let number = integer(token), (Int(Int32.min)...Int(UInt32.max)).contains(number) else { return nil }
+            values.append(number)
+        }
+        return values
+    }
+
+    private static let names: [String: Int] = [
+        "raw": raw, "copyrect": copyRect, "zrle": zrle, "cursor": cursor,
+        "desktopsize": desktopSize, "lastrect": lastRect
+    ]
+
+    private static func integer(_ token: String) -> Int? {
+        let lower = token.lowercased()
+        if lower.hasPrefix("0x") {
+            guard let value = UInt32(lower.dropFirst(2), radix: 16) else { return nil }
+            return Int(value)
+        }
+        if lower.hasPrefix("-0x") {
+            guard let magnitude = UInt32(lower.dropFirst(3), radix: 16), magnitude <= UInt32(Int32.max) else { return nil }
+            return -Int(magnitude)
+        }
+        return Int(token)
     }
 }
 
@@ -111,6 +153,15 @@ public enum FramebufferCopy {
     }
 }
 
+/// Tile-decoder failure. `offset` is the index in the uncompressed ZRLE bytes, and `errorDescription` stays the underlying message.
+public struct ZRLEDecodeError: LocalizedError {
+    public let offset: Int
+    public let underlying: Error
+    public var errorDescription: String? {
+        (underlying as? LocalizedError)?.errorDescription ?? String(describing: underlying)
+    }
+}
+
 /// ZRLE tiles in the client's 32-bit little-endian format. CPIXEL is the low three bytes, R, G, B.
 /// One decoder is kept for the connection so a tile can reuse the previous palette (subencodings 127 and 129).
 /// RFC 6143 says ZRLE should not reuse palettes; macOS Screen Sharing still does.
@@ -123,20 +174,24 @@ public struct ZRLEDecoder {
             throw RFBError.invalid("화면 압축 크기가 잘못되었습니다.")
         }
         var reader = ByteCursor(data: Data(uncompressed))
-        var pixels = [UInt8](repeating: 0, count: width * height * 4)
-        var originY = 0
-        while originY < height {
-            let tileH = min(64, height - originY)
-            var originX = 0
-            while originX < width {
-                let tileW = min(64, width - originX)
-                try decodeTile(into: &pixels, frameWidth: width, originX: originX, originY: originY, tileW: tileW, tileH: tileH, reader: &reader)
-                originX += 64
+        do {
+            var pixels = [UInt8](repeating: 0, count: width * height * 4)
+            var originY = 0
+            while originY < height {
+                let tileH = min(64, height - originY)
+                var originX = 0
+                while originX < width {
+                    let tileW = min(64, width - originX)
+                    try decodeTile(into: &pixels, frameWidth: width, originX: originX, originY: originY, tileW: tileW, tileH: tileH, reader: &reader)
+                    originX += 64
+                }
+                originY += 64
             }
-            originY += 64
+            guard reader.isAtEnd else { throw RFBError.invalid("화면 압축 데이터가 남았습니다.") }
+            return Data(pixels)
+        } catch {
+            throw ZRLEDecodeError(offset: reader.index, underlying: error)
         }
-        guard reader.isAtEnd else { throw RFBError.invalid("화면 압축 데이터가 남았습니다.") }
-        return Data(pixels)
     }
 
     private mutating func decodeTile(into pixels: inout [UInt8], frameWidth: Int, originX: Int, originY: Int, tileW: Int, tileH: Int, reader: inout ByteCursor) throws {

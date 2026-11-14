@@ -146,4 +146,119 @@ final class SessionTests: XCTestCase {
         }
         return output
     }
+
+    func testProbeRecordsRectanglesAndOnlyPostInitBytes() async throws {
+        let bell = Data([2])
+        let raw = Data([0,0,0,1, 0,0,0,0, 0,2,0,1, 0,0,0,0, 255,0,0,0, 0,255,0,0])
+        let copy = Data([0,0,0,1, 0,0,0,0, 0,2,0,1, 0,0,0,1, 0,0,0,0])
+        let capture = ProbeCapture()
+        let failure = try await runProbe(width: 2, height: 1, encodings: [RFBEncodings.raw, RFBEncodings.copyRect], updateLimit: 2, payload: bell + raw + copy, updates: 2, capture: capture)
+        XCTAssertNil(failure)
+        XCTAssertEqual(capture.bytes, bell + raw + copy)
+        XCTAssertEqual(capture.rectangles.map(\.encoding), [RFBEncodings.raw, RFBEncodings.copyRect])
+        XCTAssertEqual(capture.rectangles.map(\.bytes), [8, 4])
+        XCTAssertEqual(capture.rectangles.map(\.streamOffset), [1 + 4, 1 + raw.count + 4])
+        XCTAssertEqual(capture.rectangles.map(\.x), [0, 0])
+        XCTAssertEqual(capture.rectangles.map(\.y), [0, 0])
+        XCTAssertEqual(capture.rectangles.map(\.width), [2, 2])
+        XCTAssertEqual(capture.rectangles.map(\.height), [1, 1])
+        XCTAssertTrue(capture.rectangles.allSatisfy { $0.error == nil && $0.offset == nil && $0.decodeSeconds >= 0 && $0.decodeSeconds < 5 })
+        XCTAssertEqual(capture.updates.map(\.index), [1, 2])
+        XCTAssertEqual(capture.updates.map(\.bytes), [raw.count, copy.count])
+        XCTAssertEqual(capture.frames.first?.rgba, Data([255,0,0,255, 0,255,0,255]))
+        XCTAssertEqual(capture.frames.last?.rgba, capture.frames.first?.rgba)
+    }
+
+    func testProbeReportsZRLEOffsetAndKeepsTheFailingBytes() async throws {
+        let zrle = Data([0x78, 0x9c, 0xab, 0x07, 0x00, 0x00, 0x80, 0x00, 0x80])
+        var message = Data([0,0,0,1, 0,0,0,0, 0,1,0,1, 0,0,0,16, 0,0,0,UInt8(zrle.count)])
+        message.append(zrle)
+        let capture = ProbeCapture()
+        let failure = try await runProbe(width: 1, height: 1, encodings: [RFBEncodings.zrle, RFBEncodings.raw], updateLimit: 5, payload: message, updates: 1, capture: capture)
+        XCTAssertTrue(failure?.contains("재사용할 ZRLE 팔레트가 없습니다.") == true)
+        XCTAssertEqual(capture.bytes, message)
+        XCTAssertEqual(capture.updates.count, 0)
+        XCTAssertEqual(capture.rectangles.count, 1)
+        let rect = try XCTUnwrap(capture.rectangles.first)
+        XCTAssertEqual(rect.encoding, RFBEncodings.zrle)
+        XCTAssertEqual(rect.x, 0); XCTAssertEqual(rect.y, 0); XCTAssertEqual(rect.width, 1); XCTAssertEqual(rect.height, 1)
+        XCTAssertEqual(rect.bytes, 4 + zrle.count)
+        XCTAssertEqual(rect.offset, 1)
+        XCTAssertEqual(rect.streamOffset, 4)
+        XCTAssertEqual(rect.error, "재사용할 ZRLE 팔레트가 없습니다.")
+        XCTAssertTrue(capture.frames.isEmpty)
+    }
+
+    private func runProbe(width: Int, height: Int, encodings: [Int], updateLimit: Int, payload: Data, updates: Int, capture: ProbeCapture) async throws -> String? {
+        let listener = try NWListener(using: .tcp, on: .any)
+        let serverDone = expectation(description: "probe server finished")
+        let queue = DispatchQueue(label: "test.probe")
+        listener.newConnectionHandler = { connection in
+            connection.start(queue: queue)
+            Task {
+                defer { serverDone.fulfill() }
+                do {
+                    try await self.send(connection, Data("RFB 003.008\n".utf8))
+                    let version = try await self.read(connection, 12)
+                    XCTAssertEqual(version, Data("RFB 003.008\n".utf8))
+                    try await self.send(connection, Data([1, 2]))
+                    let selection = try await self.read(connection, 1)
+                    XCTAssertEqual(selection, Data([2]))
+                    try await self.send(connection, Data(repeating: 0, count: 16))
+                    _ = try await self.read(connection, 16)
+                    try await self.send(connection, Data([0,0,0,0]))
+                    let shared = try await self.read(connection, 1)
+                    XCTAssertEqual(shared, Data([1]))
+                    let format: [UInt8] = [32,24,0,1,0,255,0,255,0,255,0,8,16,0,0,0]
+                    let header = Data([UInt8(width >> 8), UInt8(width & 0xff), UInt8(height >> 8), UInt8(height & 0xff)])
+                    try await self.send(connection, header + Data(format) + Data([0,0,0,4] + Array("Test".utf8)))
+                    let pixelFormat = try await self.read(connection, 20)
+                    XCTAssertEqual(pixelFormat, Data([0,0,0,0] + format))
+                    let expected = RFBEncodings.setEncodingsMessage(encodings: encodings)
+                    let encodingsMessage = try await self.read(connection, expected.count)
+                    XCTAssertEqual(encodingsMessage, expected)
+                    let full = Data([3, 0, 0,0,0,0, UInt8(width >> 8), UInt8(width & 0xff), UInt8(height >> 8), UInt8(height & 0xff)])
+                    let firstRequest = try await self.read(connection, 10)
+                    XCTAssertEqual(firstRequest, full)
+                    try await self.send(connection, payload)
+                    let incremental = Data([3, 1, 0,0,0,0, UInt8(width >> 8), UInt8(width & 0xff), UInt8(height >> 8), UInt8(height & 0xff)])
+                    for _ in 0..<updates {
+                        let request = try await self.read(connection, 10)
+                        XCTAssertEqual(request, incremental)
+                    }
+                } catch { XCTFail("Probe server failed: \(error)") }
+            }
+        }
+        let listenerReady = expectation(description: "probe listener ready")
+        listener.stateUpdateHandler = { state in
+            if case .ready = state { listenerReady.fulfill() }
+            if case .failed(let error) = state { XCTFail("Listener failed: \(error)"); listenerReady.fulfill() }
+        }
+        listener.start(queue: queue)
+        defer { listener.cancel() }
+        await fulfillment(of: [listenerReady], timeout: 3)
+        let port = try XCTUnwrap(listener.port?.rawValue)
+        let client = RFBClient()
+        let clientTask = Task { () -> String? in
+            do {
+                try await client.run(host: "127.0.0.1", port: port, password: "probe", onFrame: { capture.frames.append($0) }, onReady: { name in
+                    XCTAssertEqual(name, "Test")
+                }, encodings: encodings, updateLimit: updateLimit, onServerBytes: { capture.bytes.append($0) }, onRectangle: { capture.rectangles.append($0) }, onUpdate: { capture.updates.append($0) })
+                return nil
+            } catch {
+                return error.localizedDescription
+            }
+        }
+        await fulfillment(of: [serverDone], timeout: 15)
+        await client.close()
+        clientTask.cancel()
+        return await clientTask.value
+    }
+}
+
+private final class ProbeCapture: @unchecked Sendable {
+    var bytes = Data()
+    var rectangles: [RectangleDiagnostic] = []
+    var updates: [UpdateDiagnostic] = []
+    var frames: [Frame] = []
 }
