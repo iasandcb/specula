@@ -152,6 +152,41 @@ final class EncodingTests: XCTestCase {
         print("inflate \(output) bytes in \(String(format: "%.3f", seconds))s")
         XCTAssertLessThan(seconds, 2)
     }
+
+    func testFourKZRLERectAndSixKFramebufferFit() throws {
+        XCTAssertTrue(FrameLimits.contains(width: 3840, height: 2160))
+        XCTAssertTrue(FrameLimits.contains(width: 6016, height: 3384))
+        XCTAssertFalse(FrameLimits.contains(width: 8192, height: 8192))
+        XCTAssertEqual(FrameLimits.rawBytes(width: 6016, height: 3384), 6016 * 3384 * 4)
+        XCTAssertEqual(FrameLimits.rawBytes(width: 3840, height: 2160), 3840 * 2160 * 4)
+        XCTAssertNil(FrameLimits.rawBytes(width: 8192, height: 8192))
+        let fourK = try XCTUnwrap(ZRLEBudget.compressedBytes(width: 3840, height: 2160))
+        XCTAssertGreaterThan(fourK, 8_000_000)
+        XCTAssertGreaterThanOrEqual(fourK, 3840 * 2160 * 4)
+        XCTAssertTrue((1...fourK).contains(8_000_001))
+        XCTAssertNil(ZRLEBudget.compressedBytes(width: 8192, height: 8192))
+        let tile = try XCTUnwrap(ZRLEBudget.compressedBytes(width: 64, height: 64))
+        XCTAssertFalse((1...tile).contains(9_000_000))
+
+        // 3840×2160 of solid tiles. 2160 is not a multiple of 64, so the last row is a partial tile.
+        let compressed = Data(hex: "78daedc3a10d00000803b0cca2d1fbff4cde40b44933dba8aaaaaaaaaaaaaaaf1f74ece628")
+        let stream = InflateStream()
+        var decoder = ZRLEDecoder()
+        let frame = try stream.decodeZRLE(compressed, width: 3840, height: 2160, decoder: &decoder)
+        XCTAssertEqual(frame.count, 3840 * 2160 * 4)
+        XCTAssertEqual(Array(frame.prefix(4)), [10, 20, 30, 255])
+        let middle = (1080 * 3840 + 1920) * 4
+        XCTAssertEqual(Array(frame[middle..<(middle + 4)]), [10, 20, 30, 255])
+        XCTAssertEqual(Array(frame.suffix(4)), [10, 20, 30, 255])
+
+        // The same zlib stream must stay aligned across rectangles when each one is pulled per tile.
+        let continued = InflateStream()
+        let first = try continued.decodeZRLE(Data(hex: "78da62e4e46007000000ffff"), width: 64, height: 64, decoder: &decoder)
+        let second = try continued.decodeZRLE(Data(hex: "62046200000000ffff"), width: 64, height: 64, decoder: &decoder)
+        XCTAssertEqual(Array(first.prefix(4)), [9, 8, 7, 255])
+        XCTAssertEqual(Array(second.suffix(4)), [9, 8, 7, 255])
+        XCTAssertEqual(first.count, 64 * 64 * 4)
+    }
 }
 
 private extension Data {

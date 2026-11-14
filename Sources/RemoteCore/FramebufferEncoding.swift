@@ -31,6 +31,40 @@ public enum RFBEncodings {
     }
 }
 
+/// Remote framebuffer bounds. 6016×3384 is the largest display this client agrees to store.
+public enum FrameLimits {
+    public static let maxEdge = 8192
+    public static let maxPixels = 6016 * 3384
+
+    public static func contains(width: Int, height: Int) -> Bool {
+        width > 0 && height > 0 && width <= maxEdge && height <= maxEdge && width * height <= maxPixels
+    }
+
+    /// Raw payload size, or nil when the rectangle cannot fit in the framebuffer budget.
+    public static func rawBytes(width: Int, height: Int) -> Int? {
+        guard contains(width: width, height: height) else { return nil }
+        return width * height * 4
+    }
+}
+
+/// ZRLE budgets derived from the rectangle. A full 4K frame is about 33 MB of pixels, so a fixed 8 MB cap rejects it.
+public enum ZRLEBudget {
+    public static func compressedBytes(width: Int, height: Int) -> Int? {
+        guard FrameLimits.contains(width: width, height: height) else { return nil }
+        let tiles = tileCount(width: width, height: height)
+        return width * height * 4 + tiles + 1024
+    }
+
+    /// Upper bound on bytes inflate may emit for one rectangle: raw pixels plus one byte of tile overhead.
+    public static func plainBytes(width: Int, height: Int) -> Int {
+        width * height * 4 + tileCount(width: width, height: height)
+    }
+
+    private static func tileCount(width: Int, height: Int) -> Int {
+        ((width + 63) / 64) * ((height + 63) / 64)
+    }
+}
+
 public enum RectangleFailure {
     public static func message(encoding: Int, x: Int, y: Int, width: Int, height: Int, underlying: String) -> String {
         "화면 데이터 오류 · 인코딩 \(encoding) · \(x),\(y) \(width)×\(height): \(underlying)"
@@ -111,6 +145,15 @@ public enum FramebufferCopy {
     }
 }
 
+/// Tile-decoder failure. `offset` is the index in the uncompressed ZRLE bytes, and `errorDescription` stays the underlying message.
+public struct ZRLEDecodeError: LocalizedError {
+    public let offset: Int
+    public let underlying: Error
+    public var errorDescription: String? {
+        (underlying as? LocalizedError)?.errorDescription ?? String(describing: underlying)
+    }
+}
+
 /// ZRLE tiles in the client's 32-bit little-endian format. CPIXEL is the low three bytes, R, G, B.
 /// One decoder is kept for the connection so a tile can reuse the previous palette (subencodings 127 and 129).
 /// RFC 6143 says ZRLE should not reuse palettes; macOS Screen Sharing still does.
@@ -119,27 +162,35 @@ public struct ZRLEDecoder {
     public init() {}
 
     public mutating func decode(width: Int, height: Int, uncompressed: Data) throws -> Data {
-        guard width > 0, height > 0, width <= 8192, height <= 8192 else {
-            throw RFBError.invalid("화면 압축 크기가 잘못되었습니다.")
-        }
         var reader = ByteCursor(data: Data(uncompressed))
-        var pixels = [UInt8](repeating: 0, count: width * height * 4)
-        var originY = 0
-        while originY < height {
-            let tileH = min(64, height - originY)
-            var originX = 0
-            while originX < width {
-                let tileW = min(64, width - originX)
-                try decodeTile(into: &pixels, frameWidth: width, originX: originX, originY: originY, tileW: tileW, tileH: tileH, reader: &reader)
-                originX += 64
-            }
-            originY += 64
-        }
-        guard reader.isAtEnd else { throw RFBError.invalid("화면 압축 데이터가 남았습니다.") }
-        return Data(pixels)
+        return try decode(width: width, height: height, reader: &reader)
     }
 
-    private mutating func decodeTile(into pixels: inout [UInt8], frameWidth: Int, originX: Int, originY: Int, tileW: Int, tileH: Int, reader: inout ByteCursor) throws {
+    mutating func decode<R: ZRLEBytes>(width: Int, height: Int, reader: inout R) throws -> Data {
+        guard FrameLimits.contains(width: width, height: height) else {
+            throw RFBError.invalid("화면 압축 크기가 잘못되었습니다.")
+        }
+        var pixels = Data(count: width * height * 4)
+        do {
+            var originY = 0
+            while originY < height {
+                let tileH = min(64, height - originY)
+                var originX = 0
+                while originX < width {
+                    let tileW = min(64, width - originX)
+                    try decodeTile(into: &pixels, frameWidth: width, originX: originX, originY: originY, tileW: tileW, tileH: tileH, reader: &reader)
+                    originX += 64
+                }
+                originY += 64
+            }
+            guard try reader.isAtEnd() else { throw RFBError.invalid("화면 압축 데이터가 남았습니다.") }
+            return pixels
+        } catch {
+            throw ZRLEDecodeError(offset: reader.offset, underlying: error)
+        }
+    }
+
+    private mutating func decodeTile<R: ZRLEBytes>(into pixels: inout Data, frameWidth: Int, originX: Int, originY: Int, tileW: Int, tileH: Int, reader: inout R) throws {
         let sub = Int(try reader.byte())
         let count = tileW * tileH
         if sub == 0 {
@@ -180,7 +231,7 @@ public struct ZRLEDecoder {
         }
     }
 
-    private func paintPacked(_ palette: [(UInt8, UInt8, UInt8)], into pixels: inout [UInt8], frameWidth: Int, originX: Int, originY: Int, tileW: Int, tileH: Int, reader: inout ByteCursor) throws {
+    private func paintPacked<R: ZRLEBytes>(_ palette: [(UInt8, UInt8, UInt8)], into pixels: inout Data, frameWidth: Int, originX: Int, originY: Int, tileW: Int, tileH: Int, reader: inout R) throws {
         let bits = palette.count <= 2 ? 1 : (palette.count <= 4 ? 2 : 4)
         guard (2...16).contains(palette.count) else { throw RFBError.invalid("ZRLE 팔레트 크기를 압축할 수 없습니다.") }
         for row in 0..<tileH {
@@ -199,7 +250,7 @@ public struct ZRLEDecoder {
         }
     }
 
-    private func paintPaletteRun(_ palette: [(UInt8, UInt8, UInt8)], count: Int, into pixels: inout [UInt8], frameWidth: Int, originX: Int, originY: Int, tileW: Int, reader: inout ByteCursor) throws {
+    private func paintPaletteRun<R: ZRLEBytes>(_ palette: [(UInt8, UInt8, UInt8)], count: Int, into pixels: inout Data, frameWidth: Int, originX: Int, originY: Int, tileW: Int, reader: inout R) throws {
         var written = 0
         while written < count {
             let marker = Int(try reader.byte())
@@ -214,7 +265,7 @@ public struct ZRLEDecoder {
         }
     }
 
-    private func write(_ pixel: (UInt8, UInt8, UInt8), into pixels: inout [UInt8], frameWidth: Int, x: Int, y: Int) {
+    private func write(_ pixel: (UInt8, UInt8, UInt8), into pixels: inout Data, frameWidth: Int, x: Int, y: Int) {
         let index = (y * frameWidth + x) * 4
         pixels[index] = pixel.0
         pixels[index + 1] = pixel.1
@@ -230,15 +281,13 @@ public enum ZRLERect {
     }
 }
 
-private struct ByteCursor {
-    var data: Data
-    var index = 0
-    var isAtEnd: Bool { index == data.count }
-    mutating func byte() throws -> UInt8 {
-        guard index < data.count else { throw RFBError.invalid("화면 압축 데이터가 부족합니다.") }
-        defer { index += 1 }
-        return data[index]
-    }
+protocol ZRLEBytes {
+    mutating func byte() throws -> UInt8
+    var offset: Int { get }
+    mutating func isAtEnd() throws -> Bool
+}
+
+extension ZRLEBytes {
     mutating func cpixel() throws -> (UInt8, UInt8, UInt8) {
         (try byte(), try byte(), try byte())
     }
@@ -256,5 +305,17 @@ private struct ByteCursor {
             length += extra
             if extra != 255 { return length }
         }
+    }
+}
+
+private struct ByteCursor: ZRLEBytes {
+    var data: Data
+    var index = 0
+    var offset: Int { index }
+    func isAtEnd() throws -> Bool { index == data.count }
+    mutating func byte() throws -> UInt8 {
+        guard index < data.count else { throw RFBError.invalid("화면 압축 데이터가 부족합니다.") }
+        defer { index += 1 }
+        return data[index]
     }
 }
