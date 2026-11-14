@@ -51,13 +51,21 @@ targets.append(contentsOf: [
 ])
 #endif
 
+var products: [Product] = [
+    .executable(name: "MacDisplayHelper", targets: ["MacDisplayHelper"]),
+    .library(name: "RemoteCore", targets: ["RemoteCore"])
+]
+
+#if os(macOS)
+// macOS only. The iOS app target compiles RemoteCore sources directly and does not include this executable.
+products.append(.executable(name: "vnc-probe", targets: ["vnc-probe"]))
+targets.append(.executableTarget(name: "vnc-probe", dependencies: ["RemoteCore"]))
+#endif
+
 let package = Package(
     name: "MacRemote",
     platforms: [.macOS(.v14), .iOS(.v17)],
-    products: [
-        .executable(name: "MacDisplayHelper", targets: ["MacDisplayHelper"]),
-        .library(name: "RemoteCore", targets: ["RemoteCore"])
-    ],
+    products: products,
     dependencies: packageDependencies,
     targets: targets,
     swiftLanguageModes: [.v5]

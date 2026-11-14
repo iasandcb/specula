@@ -47,7 +47,23 @@ ARD 인증은 DH/MD5/AES로 로그인 정보를 처리하지만 서버의 신원
 
 시뮬레이터용 앱 빌드와 자동 검사는 실제 맥 화면 공유 호환성, 길게 누르기 우클릭, 한글 입력 성공을 보증하지 않습니다. 사용자가 iPhone Air에서 이 맥으로 테일스케일을 통한 접속과 외장 하드웨어 키보드의 한글 입력 성공을 확인했습니다. 화면 키보드의 전체 한글 검증 항목은 별도로 남아 있습니다.
 
-아직 없는 기능: 화면 압축, 확대·이동, 연결 목록, Bonjour 검색, Keychain, Apple SRP 인증, SSH 터널, 클립보드 동기화, 네트워크 변경 시 자동 재연결, 배포용 아이콘·서명. Raw 화면 전송은 대역폭을 많이 사용하므로 현재 버전은 입력 호환성 확인을 위한 시제품입니다.
+아직 없는 기능: 확대·이동, 연결 목록, Bonjour 검색, Keychain, Apple SRP 인증, SSH 터널, 클립보드 동기화, 네트워크 변경 시 자동 재연결, 배포용 아이콘·서명. 기본 접속은 ZRLE을 광고하지 않으므로 Raw 화면 전송은 대역폭을 많이 씁니다. 현재 버전은 입력 호환성 확인을 위한 시제품입니다.
+
+## 실맥 프로토콜 프로브
+
+클라우드 환경에서는 실제 맥 화면 공유에 닿지 않습니다. 맥에서 `vnc-probe`로 앱과 같은 RFB 클라이언트·디코더를 실행해 ZRLE과 커서 인코딩을 확인할 수 있습니다. 이 실행 파일은 macOS용 Swift 패키지 타깃이며 아이폰 앱 타깃에는 들어 있지 않습니다. Xcode가 설치된 맥에서 `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer`로 `swift build`하면 `.build/debug/vnc-probe`가 만들어집니다.
+
+```
+swift run vnc-probe --host 127.0.0.1 --port 5900 --user <name> [--encodings zrle,cursor,copyrect,raw,...] [--updates 50] [--dump probe.bin]
+```
+
+암호는 `readpassphrase`로 터미널에서만 읽습니다. 입력은 에코되지 않고, 인자·환경 변수·로그·덤프에 들어가지 않습니다. `--password` 같은 인자는 거부합니다. `--user`를 주면 앱과 같이 Apple 계정 인증(유형 30)을 쓰고, 생략하면 VNC 인증(유형 2)을 씁니다.
+
+`--encodings`를 생략하면 앱의 기본 SetEncodings(CopyRect, Raw, DesktopSize, LastRect)를 보냅니다. 목록을 주면 앱과 같은 SetEncodings 형식으로 그 순서 그대로 보냅니다. 이름은 `raw`, `copyrect`, `zrle`, `cursor`, `desktopsize`, `lastrect`이고, 10진수와 `0x` 번호도 됩니다. 앱에서 ZRLE과 커서를 켠 것과 같은 목록은 `zrle,copyrect,raw,cursor,desktopsize,lastrect`입니다. 첫 화면 요청은 전체 갱신이고 그 다음부터는 증분 갱신입니다. `--updates`를 생략하면 연결이 끝날 때까지 받습니다.
+
+각 갱신 줄 아래에 사각형마다 인코딩 번호(의사 인코딩은 부호 있는 32비트), 위치, 크기, 헤더 뒤에 읽은 바이트, 디코드 시간을 출력합니다. 실패하면 오류 문구와 오프셋을 함께 출력합니다. ZRLE 디코드 실패의 오프셋은 압축을 푼 바이트 위치이고, 그 외에는 그때까지 읽은 페이로드 길이입니다. `stream`은 ServerInit 이후 바이트 스트림에서 그 사각형 헤더의 위치입니다. 마지막 `summary` 줄에 `updates/s`와 `bytes/s`를 냅니다. 속도는 서버 이름을 받은 뒤부터 계산합니다.
+
+`--dump`는 ServerInit이 끝난 뒤 서버가 보낸 바이트만 파일에 씁니다. 인증 교환과 ServerInit 자체는 넣지 않으므로, 그 파일을 화면 갱신 테스트 픽스처로 쓸 수 있습니다. 디코드에 실패하거나 연결·인증이 실패하면 0이 아닌 상태로 끝납니다. `--updates`만큼 갱신을 디코드하면 0으로 끝납니다.
 
 ## 참고
 
