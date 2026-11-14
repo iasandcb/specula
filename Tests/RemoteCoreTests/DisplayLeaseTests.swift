@@ -72,6 +72,34 @@ final class DisplayLeaseTests: XCTestCase {
         XCTAssertEqual(DisplayRotationRoute.select(monitorPanelReady: true, monitorPanelRejected: false, appleSilicon: false, iokitFramebuffer: true), .monitorPanel)
         XCTAssertEqual(DisplayRotationRoute.select(monitorPanelReady: false, monitorPanelRejected: false, appleSilicon: false, iokitFramebuffer: false), .unsupported)
     }
+    func testLandscapeFramebufferIsNotAFailedPortraitRotation() {
+        XCTAssertTrue(DisplayOrientationCheck.matches(width: 1920, height: 1080, degrees: 0))
+        XCTAssertTrue(DisplayOrientationCheck.matches(width: 1920, height: 1080, degrees: 180))
+        XCTAssertFalse(DisplayOrientationCheck.matches(width: 1920, height: 1080, degrees: 90))
+        XCTAssertTrue(DisplayOrientationCheck.matches(width: 1080, height: 1920, degrees: 90))
+        XCTAssertTrue(DisplayOrientationCheck.matches(width: 1080, height: 1920, degrees: 270))
+        XCTAssertFalse(DisplayOrientationCheck.matches(width: 1080, height: 1920, degrees: 0))
+        XCTAssertFalse(DisplayOrientationCheck.matches(width: 0, height: 1080, degrees: 0))
+        XCTAssertTrue(DisplayOrientationCheck.isPortrait(90))
+        XCTAssertFalse(DisplayOrientationCheck.isPortrait(0))
+        XCTAssertEqual(DisplayOrientationCheck.failureTitle(degrees: 0), "가로 모드")
+        XCTAssertEqual(DisplayOrientationCheck.failureTitle(degrees: 180), "가로 모드")
+        XCTAssertEqual(DisplayOrientationCheck.failureTitle(degrees: 90), "세로 모드")
+        XCTAssertEqual(DisplayOrientationCheck.failureTitle(degrees: 45), "화면 회전")
+    }
+    func testConnectedToolbarKeepsTheKeyboardButtonOnANarrowPhone() {
+        for portrait in [false, true] {
+            let titles = SessionControls.titles(macIsPortrait: portrait)
+            XCTAssertEqual(titles.last, SessionControls.keyboard)
+            XCTAssertTrue(SessionControls.fits(macIsPortrait: portrait, width: 320))
+            let open = SessionControls.legacyTitles(macIsPortrait: portrait, keyboardShown: true)
+            let closed = SessionControls.legacyTitles(macIsPortrait: portrait, keyboardShown: false)
+            XCTAssertGreaterThan(SessionControls.rowWidth(titles: open, horizontalPadding: 32), 320)
+            XCTAssertGreaterThan(SessionControls.captionWidth(open.last ?? ""), SessionControls.captionWidth(closed.last ?? ""))
+        }
+        XCTAssertEqual(SessionControls.titles(macIsPortrait: true), ["입력기", "해상도", "가로", "키보드"])
+        XCTAssertEqual(SessionControls.titles(macIsPortrait: false), ["입력기", "해상도", "세로", "키보드"])
+    }
     func testPortraitFramebufferStaysTallInTheView() {
         let frame = PointerMapping.displayedFrame(viewWidth: 800, viewHeight: 400, imageWidth: 1080, imageHeight: 1920, fill: false)
         XCTAssertEqual(frame?.height ?? 0, 400, accuracy: 0.01)

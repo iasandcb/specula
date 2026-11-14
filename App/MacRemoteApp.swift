@@ -284,6 +284,7 @@ struct RemoteView: View {
     @State private var fillScreen = false
     @State private var displaySettings = false
     @State private var rotationAlert = false
+    @State private var rotationAlertTitle = "화면 회전"
     @State private var rotationAlertText = ""
     @Environment(\.verticalSizeClass) private var verticalSizeClass
     @Environment(\.scenePhase) private var phase
@@ -291,26 +292,9 @@ struct RemoteView: View {
     var body: some View {
         NavigationStack {
             if fullScreen {
-                ScreenSurface(image: session.image, enabled: session.ready, fill: fillScreen, optionHeld: session.optionHeld, suspendKeyCapture: displaySettings, cursor: session.remoteCursor, cursorHidden: session.serverCursorHidden, key: session.key, pointer: session.pointer)
-                    .background(.black)
-                    .ignoresSafeArea()
-                    .overlay(alignment: .topTrailing) {
-                        Menu {
-                            Button(session.optionHeld ? "⌥ Option 끄기" : "⌥ Option 켜기") { session.toggleOption() }
-                            Button("맥 해상도") { session.display.cancelPendingRotation(); displaySettings = true }
-                            Button(session.display.portrait ? "가로 모드" : "세로 모드", action: togglePortrait)
-                            Button(fillScreen ? "전체 화면 보기" : "화면 채우기") { fillScreen.toggle() }
-                            Button("입력기 전환") {
-                                session.key(0xffe3, down: true); session.stroke(32); session.key(0xffe3, down: false)
-                            }
-                            Button("연결 종료", role: .destructive) { session.disconnect() }
-                        } label: {
-                            Image(systemName: "ellipsis").font(.headline)
-                                .frame(width: 44, height: 44)
-                                .background(.ultraThinMaterial, in: Circle())
-                        }.padding(8)
-                    }
-                    .overlay {
+                VStack(spacing: 0) {
+                    ZStack {
+                        ScreenSurface(image: session.image, enabled: session.ready, fill: fillScreen, optionHeld: session.optionHeld, suspendKeyCapture: displaySettings, cursor: session.remoteCursor, cursorHidden: session.serverCursorHidden, key: session.key, pointer: session.pointer)
                         if !session.ready {
                             VStack(spacing: 8) {
                                 ProgressView()
@@ -322,9 +306,29 @@ struct RemoteView: View {
                             .allowsHitTesting(false)
                         }
                     }
-                    .toolbar(.hidden, for: .navigationBar)
-                    .statusBarHidden()
-                    .persistentSystemOverlays(.hidden)
+                    .overlay(alignment: .topTrailing) {
+                        Menu {
+                            Button(session.optionHeld ? "⌥ Option 끄기" : "⌥ Option 켜기") { session.toggleOption() }
+                            Button("맥 해상도") { session.display.cancelPendingRotation(); displaySettings = true }
+                            Button(session.display.portrait ? "가로 모드" : "세로 모드", action: togglePortrait)
+                            Button(fillScreen ? "전체 화면 보기" : "화면 채우기") { fillScreen.toggle() }
+                            Button("입력기 전환", action: switchInput)
+                            Button("연결 종료", role: .destructive) { session.disconnect() }
+                        } label: {
+                            Image(systemName: "ellipsis").font(.headline)
+                                .frame(width: 44, height: 44)
+                                .background(.ultraThinMaterial, in: Circle())
+                        }.padding(8)
+                    }
+                    if session.ready {
+                        sessionControls
+                        if keyboard { TestKeyboard(session: session).padding(.bottom, 4) }
+                    }
+                }
+                .background(.black)
+                .toolbar(.hidden, for: .navigationBar)
+                .statusBarHidden()
+                .persistentSystemOverlays(.hidden)
             } else {
 
             VStack(spacing: 12) {
@@ -375,15 +379,7 @@ struct RemoteView: View {
                     ScreenSurface(image: session.image, enabled: session.ready, optionHeld: session.optionHeld, suspendKeyCapture: displaySettings, cursor: session.remoteCursor, cursorHidden: session.serverCursorHidden, key: session.key, pointer: session.pointer)
                         .background(.black).clipShape(RoundedRectangle(cornerRadius: 12))
                     if session.ready {
-                        HStack {
-                            Button("⌃ Space · 입력기") {
-                                session.key(0xffe3, down: true); session.stroke(32); session.key(0xffe3, down: false)
-                            }
-                            Spacer()
-                            Button("해상도") { session.display.cancelPendingRotation(); displaySettings = true }
-                            Button(session.display.portrait ? "가로 모드" : "세로 모드", action: togglePortrait)
-                            Button(keyboard ? "키보드 숨기기" : "키보드 표시") { keyboard.toggle() }
-                        }.font(.caption).padding(.horizontal)
+                        sessionControls
                         if keyboard { TestKeyboard(session: session) }
                     }
                 }
@@ -407,11 +403,53 @@ struct RemoteView: View {
         } message: {
             Text(session.connectionError)
         }
-        .alert("세로 모드", isPresented: $rotationAlert) {
+        .alert(rotationAlertTitle, isPresented: $rotationAlert) {
             Button("확인", role: .cancel) {}
         } message: {
             Text(rotationAlertText)
         }
+    }
+    private var sessionControls: some View {
+        ViewThatFits(in: .horizontal) {
+            controlRow(placesKeyboardFirst: true)
+            VStack(alignment: .leading, spacing: 2) {
+                controlRow(placesKeyboardFirst: true, showsOtherControls: false)
+                controlRow(placesKeyboardFirst: false, showsKeyboard: false)
+            }
+        }
+        .font(.caption)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 4)
+    }
+    /// The keyboard control leads the row, and its title stays "키보드" so opening the panel does not widen it off the screen.
+    private func controlRow(placesKeyboardFirst: Bool, showsKeyboard: Bool = true, showsOtherControls: Bool = true) -> some View {
+        HStack(spacing: 8) {
+            if showsKeyboard && placesKeyboardFirst { keyboardControl.layoutPriority(1).fixedSize(horizontal: true, vertical: false) }
+            if showsOtherControls {
+                controlButton(SessionControls.input, label: "입력기 전환", action: switchInput)
+                Spacer(minLength: 4)
+                controlButton(SessionControls.resolution, label: "해상도") {
+                    session.display.cancelPendingRotation()
+                    displaySettings = true
+                }
+                controlButton(SessionControls.orientation(macIsPortrait: session.display.portrait), label: session.display.portrait ? "가로 모드" : "세로 모드", action: togglePortrait)
+            }
+            if showsKeyboard && !placesKeyboardFirst { keyboardControl.layoutPriority(1).fixedSize(horizontal: true, vertical: false) }
+        }
+    }
+    private var keyboardControl: some View {
+        controlButton(SessionControls.keyboard, label: keyboard ? "키보드 숨기기" : "키보드 표시") { keyboard.toggle() }
+            .fontWeight(keyboard ? .semibold : .regular)
+    }
+    private func controlButton(_ title: String, label: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(title).lineLimit(1).minimumScaleFactor(0.5)
+        }
+        .buttonStyle(.borderless)
+        .accessibilityLabel(label)
+    }
+    private func switchInput() {
+        session.key(0xffe3, down: true); session.stroke(32); session.key(0xffe3, down: false)
     }
     private func togglePortrait() {
         Task {
@@ -421,11 +459,27 @@ struct RemoteView: View {
                 displaySettings = true
                 return
             }
-            if !session.display.error.isEmpty {
-                rotationAlertText = session.display.error
-                rotationAlert = true
+            guard !session.display.error.isEmpty else { return }
+            if await framebufferShowsAttemptedRotation() {
+                session.display.noteRotationApplied()
+                return
             }
+            rotationAlertTitle = DisplayOrientationCheck.failureTitle(degrees: session.display.attemptedRotation)
+            rotationAlertText = session.display.error
+            rotationAlert = true
         }
+    }
+    /// The helper can answer before MonitorPanel finishes. The stream's new size is the rotation the user sees.
+    private func framebufferShowsAttemptedRotation() async -> Bool {
+        let degrees = session.display.attemptedRotation
+        for _ in 0..<12 {
+            if let size = session.image?.size,
+               DisplayOrientationCheck.matches(width: Int(size.width.rounded()), height: Int(size.height.rounded()), degrees: degrees) {
+                return true
+            }
+            try? await Task.sleep(nanoseconds: 250_000_000)
+        }
+        return false
     }
     private func submitConnection(from field: ConnectFocus) {
         if !host.isEmpty, !password.isEmpty {

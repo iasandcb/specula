@@ -10,6 +10,7 @@ final class DisplayController: ObservableObject {
     @Published var portrait = false
     private var preferredModeID: UInt32?
     private var rotateAfterPairing = false
+    var attemptedRotation = -1
     private var host = ""
     private var token: String?
     private var heartbeat: Task<Void, Never>?
@@ -96,17 +97,22 @@ final class DisplayController: ObservableObject {
         await perform {
             let current = try JSONDecoder().decode(DisplayRotation.self, from: await self.request(path: "/rotation"))
             let next = DisplayRotationAngle.portraitToggle(from: current.degrees)
+            self.attemptedRotation = next
             let body = try JSONEncoder().encode(SetDisplayRotation(degrees: next))
             let updated = try JSONDecoder().decode(DisplayRotation.self, from: await self.request(path: "/rotation", body: body))
             guard updated.supported else { throw RFBError.invalid("이 디스플레이의 화면을 회전하지 못했습니다.") }
-            self.portrait = updated.degrees == 90
+            self.portrait = DisplayOrientationCheck.isPortrait(updated.degrees)
         }
+    }
+    func noteRotationApplied() {
+        error = ""
+        portrait = DisplayOrientationCheck.isPortrait(attemptedRotation)
     }
     private func refreshRotation() async {
         guard paired else { return }
         guard let data = try? await request(path: "/rotation"),
               let value = try? JSONDecoder().decode(DisplayRotation.self, from: data) else { return }
-        portrait = value.degrees == 90
+        portrait = DisplayOrientationCheck.isPortrait(value.degrees)
     }
     func restore() async {
         await perform {

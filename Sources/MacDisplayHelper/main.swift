@@ -239,7 +239,15 @@ private enum MainDisplayProbe {
             guard DisplayRotationRoute.select(monitorPanelReady: panel.canChangeOrientation, monitorPanelRejected: !panel.canChangeOrientation, appleSilicon: appleSilicon, iokitFramebuffer: false) == .monitorPanel else {
                 return DisplayRotation(degrees: current, supported: false)
             }
-            guard panel.setOrientation(degrees), confirm(display, panel: panel, degrees: degrees) else {
+            let beforePixels = pixelBox(display)
+            let beforeBounds = boundsBox(display)
+            guard panel.setOrientation(degrees) else {
+                return DisplayRotation(degrees: current, supported: false)
+            }
+            // setOrientation: schedules the change on the main run loop. Sleeping here keeps that change
+            // from running, so the readback stays on the old angle and the phone is told the rotation failed
+            // after the panel has already turned.
+            guard confirm(display, panel: panel, degrees: degrees, beforePixels: beforePixels, beforeBounds: beforeBounds) else {
                 return DisplayRotation(degrees: panel.orientation ?? current, supported: false)
             }
             return DisplayRotation(degrees: degrees, supported: true)
@@ -250,13 +258,28 @@ private enum MainDisplayProbe {
         return iokitApply(degrees: degrees, display: display, current: sensed)
     }
 
-    /// displayplacer waits on `CGDisplayRotation` after `setOrientation:`. A short wait fits the phone's request timeout.
-    private static func confirm(_ display: CGDirectDisplayID, panel: MonitorPanelRotation.Panel, degrees: Int) -> Bool {
-        let deadline = Date().addingTimeInterval(2)
+    private struct PixelBox: Equatable { var width: Int; var height: Int }
+
+    private static func pixelBox(_ display: CGDirectDisplayID) -> PixelBox {
+        PixelBox(width: Int(CGDisplayPixelsWide(display)), height: Int(CGDisplayPixelsHigh(display)))
+    }
+
+    private static func boundsBox(_ display: CGDirectDisplayID) -> PixelBox {
+        let bounds = CGDisplayBounds(display)
+        return PixelBox(width: Int(bounds.width.rounded()), height: Int(bounds.height.rounded()))
+    }
+
+    /// Poll the angle and the oriented size. A size that merely still matches the old mode is not confirmation.
+    private static func confirm(_ display: CGDirectDisplayID, panel: MonitorPanelRotation.Panel, degrees: Int, beforePixels: PixelBox, beforeBounds: PixelBox) -> Bool {
+        let deadline = Date().addingTimeInterval(5)
         while true {
             if sensedDegrees(display) == degrees || panel.orientation == degrees { return true }
+            let pixels = pixelBox(display)
+            let bounds = boundsBox(display)
+            if pixels != beforePixels, DisplayOrientationCheck.matches(width: pixels.width, height: pixels.height, degrees: degrees) { return true }
+            if bounds != beforeBounds, DisplayOrientationCheck.matches(width: bounds.width, height: bounds.height, degrees: degrees) { return true }
             if Date() >= deadline { return false }
-            Thread.sleep(forTimeInterval: 0.1)
+            CFRunLoopRunInMode(CFRunLoopMode.defaultMode, 0.1, false)
         }
     }
 

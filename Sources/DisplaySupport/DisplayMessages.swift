@@ -69,6 +69,26 @@ public enum DisplayRotationAngle {
     }
 }
 
+/// The framebuffer shape is the rotation the user can see. 90° and 270° are portrait.
+public enum DisplayOrientationCheck {
+    public static func isPortrait(_ degrees: Int) -> Bool {
+        let angle = DisplayRotationAngle.normalized(degrees)
+        return angle == 90 || angle == 270
+    }
+
+    /// A square frame matches either request. Any other shape must agree with the requested quadrant.
+    public static func matches(width: Int, height: Int, degrees: Int) -> Bool {
+        guard width > 0, height > 0, DisplayRotationAngle.normalized(degrees) != nil else { return false }
+        if width == height { return true }
+        return (height > width) == isPortrait(degrees)
+    }
+
+    public static func failureTitle(degrees: Int) -> String {
+        guard DisplayRotationAngle.normalized(degrees) != nil else { return "화면 회전" }
+        return isPortrait(degrees) ? "세로 모드" : "가로 모드"
+    }
+}
+
 /// Which mechanism may rotate the main display.
 /// Apple Silicon framebuffers are `IOMobileFramebuffer` and ignore the IOKit probe, so that path is Intel only.
 public enum DisplayRotationRoute: Equatable, Sendable {
@@ -131,6 +151,49 @@ public struct DisplayLease {
     public mutating func renew(now: Date) { if originalModeID != nil { expiresAt = now.addingTimeInterval(60) } }
     public func expired(now: Date) -> Bool { expiresAt.map { now >= $0 } ?? false }
     public mutating func clear() { originalModeID = nil; expiresAt = nil }
+}
+
+/// Labels for the connected-session bar. The keyboard control is always present and the words stay short
+/// so a narrow phone does not clip the trailing button.
+public enum SessionControls {
+    public static let input = "입력기"
+    public static let resolution = "해상도"
+    public static let keyboard = "키보드"
+
+    public static func orientation(macIsPortrait: Bool) -> String {
+        macIsPortrait ? "가로" : "세로"
+    }
+
+    public static func titles(macIsPortrait: Bool) -> [String] {
+        [input, resolution, orientation(macIsPortrait: macIsPortrait), keyboard]
+    }
+
+    /// Caption-size estimate. A Hangul syllable is one em; ASCII is narrower.
+    public static func captionWidth(_ title: String) -> Int {
+        title.reduce(0) { sum, character in
+            sum + (character.isASCII ? 7 : 12)
+        }
+    }
+
+    public static func rowWidth(titles: [String], gap: Int = 8, horizontalPadding: Int = 24) -> Int {
+        let text = titles.reduce(0) { $0 + captionWidth($1) }
+        let gaps = titles.isEmpty ? 0 : gap * (titles.count - 1)
+        return text + gaps + horizontalPadding
+    }
+
+    public static func fits(macIsPortrait: Bool, width: Int) -> Bool {
+        rowWidth(titles: titles(macIsPortrait: macIsPortrait)) <= width
+    }
+
+    /// The previous bar. The keyboard title grew to "키보드 숨기기" while the panel was open, which is the state at connect.
+    public static func legacyTitles(macIsPortrait: Bool, keyboardShown: Bool) -> [String] {
+        [
+            "⌃ Space · 입력기",
+            "해상도",
+            macIsPortrait ? "가로 모드" : "세로 모드",
+            keyboardShown ? "키보드 숨기기" : "키보드 표시"
+        ]
+    }
 }
 
 public enum DisplayPeer {
