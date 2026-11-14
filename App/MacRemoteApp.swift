@@ -9,6 +9,9 @@ struct MacRemoteApp: App {
 final class Session: ObservableObject {
     @Published var image: UIImage?
     @Published var status = "맥에 연결할 준비가 되었습니다"
+    /// Shown on the connect screen until the next attempt. The alert uses the same text.
+    @Published var connectionError = ""
+    @Published var showConnectionAlert = false
     @Published var active = false
     @Published var ready = false
     @Published var optionHeld = false
@@ -45,6 +48,8 @@ final class Session: ObservableObject {
         guard !trimmed.isEmpty, let port = UInt16(port), port > 0 else {
             status = "맥 주소와 포트(1~65535)를 확인해 주세요."; return
         }
+        connectionError = ""
+        showConnectionAlert = false
         display.configure(host: trimmed)
         login = Login(host: trimmed, port: port, username: username, password: password)
         resume.beginManualConnect()
@@ -110,7 +115,7 @@ final class Session: ObservableObject {
             do {
                 try await client.run(host: host, port: port, username: username, password: password, onProgress: { progress in
                     Task { @MainActor [weak self] in
-                        guard let self, self.generation == id, !reconnect else { return }
+                        guard let self, self.generation == id, !reconnect, self.connectionError.isEmpty, self.resume.acceptsSessionEvents else { return }
                         self.status = progress
                     }
                 }, onFrame: { frame in
@@ -147,7 +152,12 @@ final class Session: ObservableObject {
             remoteCursor = nil; serverCursorHidden = false
             pendingRaster = nil; pendingImage = nil
             display.endSession()
-            status = failure ?? "연결이 끊겼습니다"
+            if !resume.userEnded {
+                let message = (failure?.isEmpty == false) ? failure! : "연결이 끊겼습니다."
+                connectionError = message
+                showConnectionAlert = true
+                status = message
+            }
         } else if actions.contains(where: { if case .reconnect = $0 { return true }; return false }) {
             status = "다시 연결하는 중…"
         } else if let failure {
@@ -229,7 +239,7 @@ final class Session: ObservableObject {
         guard let image = pendingImage else { return }
         pendingImage = nil
         self.image = image
-        if ready { status = "맥에 연결됨" }
+        if ready, connectionError.isEmpty { status = "맥에 연결됨" }
     }
     nonisolated private static func rasterize(_ frame: Frame) -> UIImage? {
         guard let provider = CGDataProvider(data: frame.rgba as CFData),
@@ -262,7 +272,7 @@ struct RemoteView: View {
     @AppStorage("port") private var port = "5900"
     @AppStorage("username") private var username = ""
     @State private var password = ""
-    @FocusState private var focusedField: ConnectField?
+    @FocusState private var focusedField: ConnectFocus?
     @State private var keyboard = true
     @State private var fillScreen = false
     @State private var displaySettings = false
@@ -340,7 +350,16 @@ struct RemoteView: View {
                                 .disabled(host.isEmpty || password.isEmpty)
                         } footer: {
                             Text("맥의 화면 공유를 켜고, 맥 사용자 이름과 로그인 암호를 입력하세요. 사용자 이름을 비워두면 VNC 암호로 접속합니다. 암호는 저장하지 않습니다. 같은 네트워크나 VPN에서 사용하세요.")
+                            if !session.connectionError.isEmpty {
+                                Text(session.connectionError).foregroundStyle(.red)
+                            }
                         }
+                    }
+                    .task(id: session.active) {
+                        guard !session.active else { return }
+                        try? await Task.sleep(nanoseconds: 80_000_000)
+                        guard !Task.isCancelled, !session.active else { return }
+                        focusedField = ConnectFocus.field(host: host, port: port, username: username, password: password)
                     }
                 } else {
                     ScreenSurface(image: session.image, enabled: session.ready, optionHeld: session.optionHeld, suspendKeyCapture: displaySettings, cursor: session.remoteCursor, cursorHidden: session.serverCursorHidden, key: session.key, pointer: session.pointer)
@@ -370,8 +389,13 @@ struct RemoteView: View {
         }
         .sheet(isPresented: $displaySettings) { DisplaySettingsView(controller: session.display) }
         .onChange(of: phase) { _, newValue in session.sceneChanged(newValue) }
+        .alert("연결하지 못했습니다", isPresented: $session.showConnectionAlert) {
+            Button("확인", role: .cancel) {}
+        } message: {
+            Text(session.connectionError)
+        }
     }
-    private func submitConnection(from field: ConnectField) {
+    private func submitConnection(from field: ConnectFocus) {
         if !host.isEmpty, !password.isEmpty {
             session.connect(host: host, port: port, username: username.trimmingCharacters(in: .whitespacesAndNewlines), password: password)
             password = ""
@@ -385,8 +409,6 @@ struct RemoteView: View {
         }
     }
 }
-
-private enum ConnectField: Hashable { case host, port, username, password }
 
 struct TestKeyboard: View {
     @ObservedObject var session: Session

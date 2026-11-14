@@ -145,6 +145,18 @@ public struct SessionResume: Equatable {
     }
 }
 
+public enum ConnectFocus: Equatable, Sendable {
+    case host, port, username, password
+
+    /// Password when every other field has text. Otherwise the first empty field, in form order.
+    public static func field(host: String, port: String, username: String, password: String) -> ConnectFocus {
+        if host.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return .host }
+        if port.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return .port }
+        if username.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return .username }
+        return .password
+    }
+}
+
 public enum DisplayReconnect {
     /// The mode the user picked is applied again only after an automatic reconnect.
     public static func mode(reconnecting: Bool, selected: UInt32?) -> UInt32? {
