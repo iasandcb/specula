@@ -14,6 +14,7 @@ public actor RFBClient {
     private var height = 0
     private var pixels = Data()
     private var inflate = InflateStream()
+    private var zrle = ZRLEDecoder()
     private let queue = DispatchQueue(label: "MacRemote.RFB")
     public init() {}
 
@@ -37,6 +38,7 @@ public actor RFBClient {
                     onCursor: @escaping @Sendable (RemoteCursor) -> Void = { _ in }) async throws {
         guard connection == nil else { throw RFBError.invalid("이미 연결 중입니다.") }
         inflate = InflateStream()
+        zrle = ZRLEDecoder()
         guard let endpointPort = NWEndpoint.Port(rawValue: port) else { throw RFBError.invalid("포트를 확인해 주세요.") }
         let conn = NWConnection(host: NWEndpoint.Host(host), port: endpointPort, using: Self.transportParameters())
         connection = conn
@@ -203,7 +205,7 @@ public actor RFBClient {
             case .zrle(let x, let y, let w, let h, let data):
                 guard x + w <= width, y + h <= height else { throw RFBError.invalid("화면 데이터의 범위가 잘못되었습니다.") }
                 let plain = try inflate.inflate(data)
-                let rgba = try ZRLERect.decode(width: w, height: h, uncompressed: plain)
+                let rgba = try zrle.decode(width: w, height: h, uncompressed: plain)
                 try blit(rgba, x: x, y: y, w: w, h: h)
                 pixelsChanged = true
             case .cursor(let value):
@@ -252,7 +254,7 @@ public actor RFBClient {
                 connection.receive(minimumIncompleteLength: 1, maximumLength: remaining) { data, _, complete, error in
                     if let error { continuation.resume(throwing: error) }
                     else if let data, !data.isEmpty { continuation.resume(returning: data) }
-                    else { continuation.resume(throwing: RFBError.invalid(complete ? "맥이 연결을 종료했습니다." : "데이터를 받지 못했습니다.")) }
+                    else { continuation.resume(throwing: RFBError.closed) }
                 }
             }
             result.append(part)

@@ -95,12 +95,17 @@ public enum FramebufferCopy {
 }
 
 /// ZRLE tiles in the client's 32-bit little-endian format. CPIXEL is the low three bytes, R, G, B.
-public enum ZRLERect {
-    public static func decode(width: Int, height: Int, uncompressed: Data) throws -> Data {
+/// One decoder is kept for the connection so a tile can reuse the previous palette (subencodings 127 and 129).
+/// RFC 6143 says ZRLE should not reuse palettes; macOS Screen Sharing still does.
+public struct ZRLEDecoder {
+    private var palette: [(UInt8, UInt8, UInt8)] = []
+    public init() {}
+
+    public mutating func decode(width: Int, height: Int, uncompressed: Data) throws -> Data {
         guard width > 0, height > 0, width <= 8192, height <= 8192 else {
             throw RFBError.invalid("화면 압축 크기가 잘못되었습니다.")
         }
-        var reader = ByteCursor(data: uncompressed)
+        var reader = ByteCursor(data: Data(uncompressed))
         var pixels = [UInt8](repeating: 0, count: width * height * 4)
         var originY = 0
         while originY < height {
@@ -117,7 +122,7 @@ public enum ZRLERect {
         return Data(pixels)
     }
 
-    private static func decodeTile(into pixels: inout [UInt8], frameWidth: Int, originX: Int, originY: Int, tileW: Int, tileH: Int, reader: inout ByteCursor) throws {
+    private mutating func decodeTile(into pixels: inout [UInt8], frameWidth: Int, originX: Int, originY: Int, tileW: Int, tileH: Int, reader: inout ByteCursor) throws {
         let sub = Int(try reader.byte())
         let count = tileW * tileH
         if sub == 0 {
@@ -131,22 +136,11 @@ public enum ZRLERect {
                 write(pixel, into: &pixels, frameWidth: frameWidth, x: originX + index % tileW, y: originY + index / tileW)
             }
         } else if (2...16).contains(sub) {
-            let palette = try reader.palette(sub)
-            let bits = sub <= 2 ? 1 : (sub <= 4 ? 2 : 4)
-            for row in 0..<tileH {
-                var bitsLeft = 0
-                var value = 0
-                for column in 0..<tileW {
-                    if bitsLeft < bits {
-                        value = Int(try reader.byte())
-                        bitsLeft = 8
-                    }
-                    bitsLeft -= bits
-                    let index = (value >> bitsLeft) & ((1 << bits) - 1)
-                    guard palette.indices.contains(index) else { throw RFBError.invalid("화면 압축 팔레트가 잘못되었습니다.") }
-                    write(palette[index], into: &pixels, frameWidth: frameWidth, x: originX + column, y: originY + row)
-                }
-            }
+            palette = try reader.palette(sub)
+            try paintPacked(palette, into: &pixels, frameWidth: frameWidth, originX: originX, originY: originY, tileW: tileW, tileH: tileH, reader: &reader)
+        } else if sub == 127 {
+            guard !palette.isEmpty else { throw RFBError.invalid("재사용할 ZRLE 팔레트가 없습니다.") }
+            try paintPacked(palette, into: &pixels, frameWidth: frameWidth, originX: originX, originY: originY, tileW: tileW, tileH: tileH, reader: &reader)
         } else if sub == 128 {
             var written = 0
             while written < count {
@@ -158,31 +152,64 @@ public enum ZRLERect {
                 }
                 written += run
             }
+        } else if sub == 129 {
+            guard !palette.isEmpty else { throw RFBError.invalid("재사용할 ZRLE 팔레트가 없습니다.") }
+            try paintPaletteRun(palette, count: count, into: &pixels, frameWidth: frameWidth, originX: originX, originY: originY, tileW: tileW, reader: &reader)
         } else if (130...255).contains(sub) {
-            let palette = try reader.palette(sub - 128)
-            var written = 0
-            while written < count {
-                let marker = Int(try reader.byte())
-                let index = marker & 127
-                guard palette.indices.contains(index) else { throw RFBError.invalid("화면 압축 팔레트가 잘못되었습니다.") }
-                let run = marker < 128 ? 1 : try reader.run(limit: count - written)
-                for offset in 0..<run {
-                    let pixelIndex = written + offset
-                    write(palette[index], into: &pixels, frameWidth: frameWidth, x: originX + pixelIndex % tileW, y: originY + pixelIndex / tileW)
-                }
-                written += run
-            }
+            palette = try reader.palette(sub - 128)
+            try paintPaletteRun(palette, count: count, into: &pixels, frameWidth: frameWidth, originX: originX, originY: originY, tileW: tileW, reader: &reader)
         } else {
             throw RFBError.invalid("지원하지 않는 ZRLE 타일입니다: \(sub)")
         }
     }
 
-    private static func write(_ pixel: (UInt8, UInt8, UInt8), into pixels: inout [UInt8], frameWidth: Int, x: Int, y: Int) {
+    private func paintPacked(_ palette: [(UInt8, UInt8, UInt8)], into pixels: inout [UInt8], frameWidth: Int, originX: Int, originY: Int, tileW: Int, tileH: Int, reader: inout ByteCursor) throws {
+        let bits = palette.count <= 2 ? 1 : (palette.count <= 4 ? 2 : 4)
+        guard (2...16).contains(palette.count) else { throw RFBError.invalid("ZRLE 팔레트 크기를 압축할 수 없습니다.") }
+        for row in 0..<tileH {
+            var bitsLeft = 0
+            var value = 0
+            for column in 0..<tileW {
+                if bitsLeft < bits {
+                    value = Int(try reader.byte())
+                    bitsLeft = 8
+                }
+                bitsLeft -= bits
+                let index = (value >> bitsLeft) & ((1 << bits) - 1)
+                guard palette.indices.contains(index) else { throw RFBError.invalid("화면 압축 팔레트가 잘못되었습니다.") }
+                write(palette[index], into: &pixels, frameWidth: frameWidth, x: originX + column, y: originY + row)
+            }
+        }
+    }
+
+    private func paintPaletteRun(_ palette: [(UInt8, UInt8, UInt8)], count: Int, into pixels: inout [UInt8], frameWidth: Int, originX: Int, originY: Int, tileW: Int, reader: inout ByteCursor) throws {
+        var written = 0
+        while written < count {
+            let marker = Int(try reader.byte())
+            let index = marker & 127
+            guard palette.indices.contains(index) else { throw RFBError.invalid("화면 압축 팔레트가 잘못되었습니다.") }
+            let run = marker < 128 ? 1 : try reader.run(limit: count - written)
+            for offset in 0..<run {
+                let pixelIndex = written + offset
+                write(palette[index], into: &pixels, frameWidth: frameWidth, x: originX + pixelIndex % tileW, y: originY + pixelIndex / tileW)
+            }
+            written += run
+        }
+    }
+
+    private func write(_ pixel: (UInt8, UInt8, UInt8), into pixels: inout [UInt8], frameWidth: Int, x: Int, y: Int) {
         let index = (y * frameWidth + x) * 4
         pixels[index] = pixel.0
         pixels[index + 1] = pixel.1
         pixels[index + 2] = pixel.2
         pixels[index + 3] = 255
+    }
+}
+
+public enum ZRLERect {
+    public static func decode(width: Int, height: Int, uncompressed: Data) throws -> Data {
+        var decoder = ZRLEDecoder()
+        return try decoder.decode(width: width, height: height, uncompressed: uncompressed)
     }
 }
 

@@ -1,12 +1,19 @@
 import Foundation
 
-/// What to do with a live VNC session when the app is backgrounded or the link drops.
-/// A short background keeps the socket. Coming back to a dead link reconnects once;
-/// a failed reconnect waits for the next foreground transition instead of looping.
+/// What to do with a VNC session when the link drops or the app moves between foreground and background.
+/// A handshake that never produces a frame, or a protocol error, returns to the connect screen.
+/// A working session that loses the socket reconnects at most three times, with a longer pause each time.
 public struct SessionResume: Equatable {
     public enum Scene: Equatable, Sendable { case active, inactive, background }
     public enum Link: Equatable, Sendable { case idle, connecting, live, reconnecting, down }
-    public enum Action: Equatable, Sendable { case beginBackgroundTask, endBackgroundTask, reconnect }
+    public enum LinkFailure: Equatable, Sendable { case transport, protocolError }
+    public enum Action: Equatable, Sendable {
+        case beginBackgroundTask
+        case endBackgroundTask
+        case reconnect(afterMilliseconds: Int)
+    }
+
+    public static let maxAutomaticReconnects = 3
 
     public private(set) var scene: Scene
     public private(set) var link: Link
@@ -14,8 +21,7 @@ public struct SessionResume: Equatable {
     public private(set) var hasCredentials: Bool
     public private(set) var everLive: Bool
     public private(set) var backgroundTaskOpen: Bool
-    /// The open attempt is an automatic reconnect, so its failure must not schedule another immediately.
-    public private(set) var resumeAttempt: Bool
+    public private(set) var automaticReconnects: Int
 
     public init() {
         scene = .active
@@ -24,10 +30,10 @@ public struct SessionResume: Equatable {
         hasCredentials = false
         everLive = false
         backgroundTaskOpen = false
-        resumeAttempt = false
+        automaticReconnects = 0
     }
 
-    /// Stay on the remote screen, including a dead link we still intend to restore.
+    /// Stay on the remote screen during a connection, a retry, or a drop we still intend to restore.
     public var presentsRemote: Bool {
         if userEnded { return false }
         switch link {
@@ -37,26 +43,47 @@ public struct SessionResume: Equatable {
         }
     }
 
+    /// Frame and cursor callbacks must ignore events after the attempt has already ended.
+    public var acceptsSessionEvents: Bool {
+        switch link {
+        case .connecting, .live, .reconnecting: return true
+        case .idle, .down: return false
+        }
+    }
+
+    public static func backoffMilliseconds(attempt: Int) -> Int {
+        switch attempt {
+        case 1: return 400
+        case 2: return 1_200
+        default: return 2_500
+        }
+    }
+
     public mutating func beginManualConnect() {
         hasCredentials = true
         userEnded = false
-        resumeAttempt = false
+        everLive = false
+        automaticReconnects = 0
         link = .connecting
     }
 
-    public mutating func noteLive() {
+    /// A decoded framebuffer means this attempt really worked, so the reconnect budget starts over.
+    public mutating func noteFrame() {
+        guard acceptsSessionEvents else { return }
         link = .live
         everLive = true
-        resumeAttempt = false
+        automaticReconnects = 0
     }
 
-    public mutating func linkClosed() -> [Action] {
+    public mutating func linkClosed(_ failure: LinkFailure) -> [Action] {
         if userEnded || link == .idle || link == .down { return [] }
-        let failedResume = resumeAttempt
-        resumeAttempt = false
         link = .down
-        guard everLive, hasCredentials, scene == .active, !failedResume else { return [] }
-        return markReconnect()
+        if failure == .protocolError || !everLive || !hasCredentials {
+            abandon()
+            return []
+        }
+        guard scene == .active else { return [] }
+        return reconnectIfAllowed()
     }
 
     public mutating func scene(_ next: Scene) -> [Action] {
@@ -71,9 +98,8 @@ public struct SessionResume: Equatable {
             backgroundTaskOpen = false
             actions.append(.endBackgroundTask)
         }
-        // Only the transition into the foreground retries. A drop while already active retries once from linkClosed.
-        if next == .active, previous != .active, link == .down, everLive, hasCredentials, !userEnded, !resumeAttempt {
-            actions.append(contentsOf: markReconnect())
+        if next == .active, previous != .active, link == .down, everLive, hasCredentials, !userEnded {
+            actions.append(contentsOf: reconnectIfAllowed())
         }
         return actions
     }
@@ -89,7 +115,7 @@ public struct SessionResume: Equatable {
         hasCredentials = false
         link = .idle
         everLive = false
-        resumeAttempt = false
+        automaticReconnects = 0
         var actions: [Action] = []
         if backgroundTaskOpen {
             backgroundTaskOpen = false
@@ -102,10 +128,20 @@ public struct SessionResume: Equatable {
         !userEnded && hasCredentials && (link == .connecting || link == .live || link == .reconnecting)
     }
 
-    private mutating func markReconnect() -> [Action] {
-        resumeAttempt = true
+    private mutating func reconnectIfAllowed() -> [Action] {
+        guard automaticReconnects < Self.maxAutomaticReconnects else {
+            abandon()
+            return []
+        }
+        automaticReconnects += 1
         link = .reconnecting
-        return [.reconnect]
+        return [.reconnect(afterMilliseconds: Self.backoffMilliseconds(attempt: automaticReconnects))]
+    }
+
+    private mutating func abandon() {
+        everLive = false
+        link = .down
+        automaticReconnects = 0
     }
 }
 
