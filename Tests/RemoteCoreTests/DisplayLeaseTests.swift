@@ -70,6 +70,18 @@ final class DisplayLeaseTests: XCTestCase {
         XCTAssertLessThan(frame?.width ?? 0, frame?.height ?? 0)
         XCTAssertTrue(FrameLimits.contains(width: 1080, height: 1920))
     }
+    func testPairingCodeIsGroupedAndSizedForALargeWindow() {
+        XCTAssertEqual(PairingCodePresentation.groupedDigits("123456"), "123 456")
+        XCTAssertEqual(PairingCodePresentation.groupedDigits("12345"), "12345")
+        XCTAssertEqual(PairingCodePresentation.digitPointSize(screenHeight: 800), 200)
+        XCTAssertEqual(PairingCodePresentation.digitPointSize(screenHeight: 1600), 400)
+        XCTAssertEqual(PairingCodePresentation.digitPointSize(screenHeight: 100), 45)
+        let now = Date(timeIntervalSince1970: 1_000)
+        XCTAssertEqual(PairingCodePresentation.remainingLabel(until: now.addingTimeInterval(125), now: now), "남은 시간 2:05")
+        XCTAssertEqual(PairingCodePresentation.remainingLabel(until: now.addingTimeInterval(60), now: now), "남은 시간 1:00")
+        XCTAssertNil(PairingCodePresentation.remainingLabel(until: now, now: now))
+        XCTAssertNil(PairingCodePresentation.remainingLabel(until: now.addingTimeInterval(-1), now: now))
+    }
     func testResolutionReturnsOnlyOnAutomaticReconnect() {
         XCTAssertEqual(DisplayReconnect.mode(reconnecting: true, selected: 42), 42)
         XCTAssertNil(DisplayReconnect.mode(reconnecting: false, selected: 42))
