@@ -98,6 +98,40 @@ public final class NWConnection: @unchecked Sendable {
         }
     }
 
+    /// When non-zero, each `receive` returns at most a random 1...limit bytes. Tests use this to imitate Wi-Fi segments.
+    public static var testingSegmentLimit: Int = 0
+    public static var testingReceiveCount = 0
+    public static var testingLargestReceive = 0
+    private static let segmentLock = NSLock()
+    private static var segmentSeed: UInt64 = 0
+
+    public static func testingSegments(limit: Int, seed: UInt64) {
+        segmentLock.lock()
+        testingSegmentLimit = limit
+        segmentSeed = seed
+        testingReceiveCount = 0
+        testingLargestReceive = 0
+        segmentLock.unlock()
+    }
+
+    private static func cappedRoom(_ room: Int) -> Int {
+        segmentLock.lock()
+        defer { segmentLock.unlock() }
+        guard testingSegmentLimit > 0, room > 0 else { return room }
+        segmentSeed = segmentSeed &* 6364136223846793005 &+ 1
+        let span = min(room, testingSegmentLimit)
+        return Int(segmentSeed % UInt64(span)) + 1
+    }
+
+    private static func noteReceive(_ count: Int) {
+        segmentLock.lock()
+        if testingSegmentLimit > 0 {
+            testingReceiveCount += 1
+            if count > testingLargestReceive { testingLargestReceive = count }
+        }
+        segmentLock.unlock()
+    }
+
     public func receive(minimumIncompleteLength: Int, maximumLength: Int, completion: @escaping (Data?, ContentContext?, Bool, NWError?) -> Void) {
         let queue = queue ?? .global()
         queue.async { [weak self] in
@@ -109,7 +143,7 @@ public final class NWConnection: @unchecked Sendable {
             let limit = max(maximumLength, minimum)
             var collected = Data()
             while collected.count < minimum {
-                let room = limit - collected.count
+                let room = Self.cappedRoom(limit - collected.count)
                 var buffer = [UInt8](repeating: 0, count: room)
                 self.lock.lock()
                 let descriptor = self.fd
@@ -124,6 +158,7 @@ public final class NWConnection: @unchecked Sendable {
                 }
                 if count > 0 {
                     collected.append(contentsOf: buffer.prefix(count))
+                    Self.noteReceive(count)
                 } else if count == 0 {
                     completion(collected.isEmpty ? nil : collected, nil, true, nil)
                     return
