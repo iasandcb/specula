@@ -72,7 +72,7 @@ final class WireTests: XCTestCase {
         XCTAssertEqual(KeyboardCapture(enabled: false, interfacePresented: false, textInputFocused: false, isFirstResponder: true, hardwareKeyboardConnected: true).action, .resign)
     }
     func testKeyboardCaptureDoesNotBecomeFirstResponderWithoutHardwareKeyboard() {
-        // The landscape ellipsis menu toggles interfacePresented. Becoming first responder
+        // The ⋯ menu toggles interfacePresented. Becoming first responder
         // then presents the software keyboard, so stay out of the responder chain.
         let idle = KeyboardCapture(enabled: true, interfacePresented: false, textInputFocused: false, isFirstResponder: false, hardwareKeyboardConnected: false)
         XCTAssertTrue(idle.forwardsToRemote)
@@ -94,6 +94,15 @@ final class WireTests: XCTestCase {
         let attachedDuringSheet = KeyboardCapture(enabled: true, interfacePresented: true, textInputFocused: false, isFirstResponder: false, hardwareKeyboardConnected: true)
         XCTAssertFalse(attachedDuringSheet.takesFirstResponder)
         XCTAssertEqual(attachedDuringSheet.action, .stay)
+    }
+    func testContextMenuDoesNotCountAsKeyboardYieldingInterface() {
+        XCTAssertTrue(PresentedChrome.isContextMenu(className: "_UIContextMenuActionsOnlyViewController"))
+        XCTAssertTrue(PresentedChrome.isContextMenu(className: "_UIContextMenuWindow"))
+        XCTAssertFalse(PresentedChrome.yieldsKeyboard(className: "_UIContextMenuActionsOnlyViewController"))
+        XCTAssertFalse(PresentedChrome.isContextMenu(className: "UIAlertController"))
+        XCTAssertTrue(PresentedChrome.yieldsKeyboard(className: "UIAlertController"))
+        XCTAssertTrue(PresentedChrome.yieldsKeyboard(className: "PresentationHostingController"))
+        XCTAssertFalse(PresentedChrome.yieldsKeyboard(className: "UIEditMenuViewController"))
     }
     func testPhysicalPositionsRemainLatinForMacIME() {
         // Korean ㄱ occupies the US R position; never transmit composed Korean here.

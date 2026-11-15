@@ -181,6 +181,55 @@ public struct DisplayLease {
     public mutating func clear() { originalModeID = nil; expiresAt = nil }
 }
 
+/// Titles for the ⋯ menu, which replaces the connected-session bar in both orientations.
+public enum SessionMenuItem: Equatable {
+    case option(held: Bool)
+    case keyboard(shown: Bool)
+    case input
+    case resolution
+    case orientation(macIsPortrait: Bool)
+    case fill(enabled: Bool)
+    case disconnect
+
+    public var title: String {
+        switch self {
+        case .option(let held): return held ? "⌥ Option 끄기" : "⌥ Option 켜기"
+        case .keyboard(let shown): return shown ? "키보드 숨기기" : "키보드 표시"
+        case .input: return "입력기 전환"
+        case .resolution: return "맥 해상도"
+        case .orientation(let macIsPortrait): return macIsPortrait ? "가로 모드" : "세로 모드"
+        case .fill(let enabled): return enabled ? "전체 화면 보기" : "화면 채우기"
+        case .disconnect: return "연결 종료"
+        }
+    }
+
+    /// Option, keyboard, and input source, then display controls, then disconnect.
+    public var section: Int {
+        switch self {
+        case .option, .keyboard, .input: return 0
+        case .resolution, .orientation, .fill: return 1
+        case .disconnect: return 2
+        }
+    }
+
+    public var isDestructive: Bool {
+        if case .disconnect = self { return true }
+        return false
+    }
+
+    public static func items(optionHeld: Bool, keyboardShown: Bool, macIsPortrait: Bool, fillScreen: Bool) -> [SessionMenuItem] {
+        [
+            .option(held: optionHeld),
+            .keyboard(shown: keyboardShown),
+            .input,
+            .resolution,
+            .orientation(macIsPortrait: macIsPortrait),
+            .fill(enabled: fillScreen),
+            .disconnect
+        ]
+    }
+}
+
 /// Labels for the connected-session bar. The keyboard control is always present and the words stay short
 /// so a narrow phone does not clip the trailing button.
 public enum SessionControls {
@@ -194,6 +243,9 @@ public enum SessionControls {
     public static let buttonSpacing = 8
     public static let labelPadding = 8
     public static let horizontalInset = 8
+    /// The ⋯ button. Larger than the 44pt minimum so the glyph and hit target stay easy to see.
+    public static let menuButtonSide = 64
+    public static let menuGlyphPointSize = 28
 
     public static func orientation(macIsPortrait: Bool) -> String {
         macIsPortrait ? "가로" : "세로"

@@ -68,6 +68,20 @@ public enum Wire {
     }
 }
 
+/// A context menu is not a sheet. Treating it as one makes key capture resign
+/// first responder while the ⋯ menu is opening, which dismisses the popup.
+public enum PresentedChrome {
+    public static func isContextMenu(className: String) -> Bool {
+        let markers = ["ContextMenu", "EditMenu", "_UIMenu", "UICalloutBar"]
+        return markers.contains { className.contains($0) }
+    }
+
+    /// Alerts and sheets yield the keyboard. A transient menu does not.
+    public static func yieldsKeyboard(className: String) -> Bool {
+        !isContextMenu(className: className)
+    }
+}
+
 /// Whether the remote screen should take hardware keys.
 /// A presented sheet or alert, or a focused text field, keeps typing in the app.
 /// First-responder capture waits for a hardware keyboard. Without one, becoming

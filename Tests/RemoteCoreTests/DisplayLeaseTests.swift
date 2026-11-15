@@ -123,6 +123,22 @@ final class DisplayLeaseTests: XCTestCase {
         XCTAssertEqual(SessionControls.titles(macIsPortrait: true), ["입력기", "해상도", "가로", "키보드"])
         XCTAssertEqual(SessionControls.titles(macIsPortrait: false), ["입력기", "해상도", "세로", "키보드"])
     }
+    func testSessionMenuUsesALargeTargetAndReadableTitles() {
+        XCTAssertGreaterThanOrEqual(SessionControls.menuButtonSide, 44)
+        XCTAssertGreaterThanOrEqual(SessionControls.menuButtonSide, SessionControls.minimumHit)
+        XCTAssertGreaterThan(SessionControls.menuGlyphPointSize, SessionControls.labelPointSize)
+        let shown = SessionMenuItem.items(optionHeld: false, keyboardShown: true, macIsPortrait: false, fillScreen: false)
+        XCTAssertEqual(shown.map(\.title), [
+            "⌥ Option 켜기", "키보드 숨기기", "입력기 전환", "맥 해상도", "세로 모드", "화면 채우기", "연결 종료"
+        ])
+        XCTAssertEqual(shown.map(\.section), [0, 0, 0, 1, 1, 1, 2])
+        XCTAssertEqual(shown.last?.isDestructive, true as Bool?)
+        let hidden = SessionMenuItem.items(optionHeld: true, keyboardShown: false, macIsPortrait: true, fillScreen: true)
+        XCTAssertEqual(hidden.map(\.title), [
+            "⌥ Option 끄기", "키보드 표시", "입력기 전환", "맥 해상도", "가로 모드", "전체 화면 보기", "연결 종료"
+        ])
+        XCTAssertTrue(shown.allSatisfy { $0.title.count >= 2 })
+    }
     func testPortraitFramebufferStaysTallInTheView() {
         let frame = PointerMapping.displayedFrame(viewWidth: 800, viewHeight: 400, imageWidth: 1080, imageHeight: 1920, fill: false)
         XCTAssertEqual(frame?.height ?? 0, 400, accuracy: 0.01)
