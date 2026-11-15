@@ -2,28 +2,103 @@ import GameController
 import SwiftUI
 
 struct ScreenSurface: UIViewRepresentable {
-    var image: UIImage?
+    var frames: FramePump
     var enabled: Bool
     var fill: Bool = false
     var optionHeld: Bool = false
     var suspendKeyCapture = false
-    var cursor: RemoteCursor?
-    var cursorHidden = false
+    var menuGate: MenuGate
     var key: (UInt32, Bool) -> Void
     var pointer: (CGPoint, UInt8) -> Void
     func makeUIView(context: Context) -> RemoteCanvas { RemoteCanvas() }
     func updateUIView(_ view: RemoteCanvas, context: Context) {
         view.remoteOptionHeld = optionHeld
-        view.fill = fill
-        view.image = image
+        if view.fill != fill { view.fill = fill }
         view.key = key
         view.pointer = pointer
         view.suspendKeyCapture = suspendKeyCapture
-        if view.serverCursor != cursor { view.serverCursor = cursor }
-        if view.serverCursorHidden != cursorHidden { view.serverCursorHidden = cursorHidden }
         view.isUserInteractionEnabled = enabled
-        // Frame updates must not steal first responder from a sheet, alert, or text field.
+        // Frames update the canvas directly. Routing them through this method
+        // rebuilt the ⋯ menu on every framebuffer and made the popup flicker.
+        frames.bind(view)
+        menuGate.attach(view)
         view.setKeyCaptureEnabled(enabled)
+    }
+}
+
+/// Owns the ⋯ menu's open state so key capture and the screen's gestures stay still while it is up.
+final class MenuGate: ObservableObject {
+    private weak var canvas: RemoteCanvas?
+    private var generation = 0
+    private var sawMenu = false
+    private var missed = 0
+
+    func attach(_ canvas: RemoteCanvas) { self.canvas = canvas }
+
+    func menuBegan() {
+        generation += 1
+        sawMenu = false
+        missed = 0
+        canvas?.setMenuOpen(true)
+        poll(generation, attempt: 0)
+    }
+
+    func menuEnded() {
+        finish(refreshCapture: true)
+    }
+
+    /// `refreshCapture` is false when the press never showed a menu we can see.
+    /// Becoming first responder then would dismiss a popup UIKit did not advertise.
+    private func finish(refreshCapture: Bool) {
+        generation += 1
+        sawMenu = false
+        missed = 0
+        canvas?.setMenuOpen(false, refreshCapture: refreshCapture)
+    }
+
+    private func poll(_ generation: Int, attempt: Int) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
+            guard let self, self.generation == generation else { return }
+            let visible = Self.contextMenuVisible()
+            if visible {
+                self.sawMenu = true
+                self.missed = 0
+                if attempt < 200 { self.poll(generation, attempt: attempt + 1) }
+                else { self.finish(refreshCapture: true) }
+                return
+            }
+            // A press that never presents a menu must not leave gestures disabled.
+            if !self.sawMenu, attempt < 6 {
+                self.poll(generation, attempt: attempt + 1)
+                return
+            }
+            if !self.sawMenu {
+                self.finish(refreshCapture: false)
+                return
+            }
+            // One missed sample is the animation between windows. Wait for a second.
+            self.missed += 1
+            if self.missed < 2, attempt < 200 {
+                self.poll(generation, attempt: attempt + 1)
+                return
+            }
+            self.finish(refreshCapture: true)
+        }
+    }
+
+    private static func contextMenuVisible() -> Bool {
+        let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+        for window in scenes.flatMap(\.windows) {
+            if PresentedChrome.isContextMenu(className: String(describing: type(of: window))) { return true }
+            if let root = window.rootViewController, controllerTreeIsMenu(root) { return true }
+        }
+        return false
+    }
+
+    private static func controllerTreeIsMenu(_ controller: UIViewController) -> Bool {
+        if PresentedChrome.isContextMenu(className: String(describing: type(of: controller))) { return true }
+        if let presented = controller.presentedViewController, controllerTreeIsMenu(presented) { return true }
+        return controller.children.contains(where: controllerTreeIsMenu)
     }
 }
 
@@ -42,6 +117,8 @@ final class RemoteCanvas: UIView, UIGestureRecognizerDelegate, UIPointerInteract
     private var allowKeyCapture = false
     private var keyCaptureArmed = false
     private var updatingKeyCapture = false
+    private var menuOpen = false
+    weak var boundPump: FramePump?
     /// Set before becomeFirstResponder so UIKit presents these instead of the system keyboard.
     private var softwareKeyboardSuppressed = false
     private let captureInputView = SuppressedInputView()
@@ -76,6 +153,16 @@ final class RemoteCanvas: UIView, UIGestureRecognizerDelegate, UIPointerInteract
         refreshKeyCapture()
         armKeyCaptureFollowUp()
     }
+    func setMenuOpen(_ open: Bool, refreshCapture: Bool = true) {
+        guard menuOpen != open else { return }
+        menuOpen = open
+        // Resigning while the popup is opening cancels it. Refresh once it has closed.
+        if !open, refreshCapture { DispatchQueue.main.async { [weak self] in self?.refreshKeyCapture() } }
+    }
+    func applyServerCursor(_ cursor: RemoteCursor?, hidden: Bool) {
+        if serverCursor != cursor { serverCursor = cursor }
+        if serverCursorHidden != hidden { serverCursorHidden = hidden }
+    }
     override func didMoveToWindow() {
         super.didMoveToWindow()
         refreshKeyCapture()
@@ -98,13 +185,22 @@ final class RemoteCanvas: UIView, UIGestureRecognizerDelegate, UIPointerInteract
         if let root = window?.rootViewController, Self.presentsInterface(root) { return true }
         var responder: UIResponder? = self
         while let current = responder {
-            if let controller = current as? UIViewController, controller.presentedViewController != nil { return true }
+            if let controller = current as? UIViewController,
+               let presented = controller.presentedViewController,
+               PresentedChrome.yieldsKeyboard(className: String(describing: type(of: presented))) {
+                return true
+            }
             responder = current.next
         }
         return false
     }
     private static func presentsInterface(_ controller: UIViewController) -> Bool {
-        controller.presentedViewController != nil || controller.children.contains(where: presentsInterface)
+        var presented = controller.presentedViewController
+        while let current = presented {
+            if PresentedChrome.yieldsKeyboard(className: String(describing: type(of: current))) { return true }
+            presented = current.presentedViewController
+        }
+        return controller.children.contains(where: presentsInterface)
     }
     private static func hasFocusedTextInput(_ view: UIView?) -> Bool {
         guard let view else { return false }
@@ -112,6 +208,8 @@ final class RemoteCanvas: UIView, UIGestureRecognizerDelegate, UIPointerInteract
         return view.subviews.contains(where: hasFocusedTextInput)
     }
     private func refreshKeyCapture() {
+        // The ⋯ menu's own presentation must not resign or become first responder.
+        guard !menuOpen else { return }
         guard !updatingKeyCapture else { return }
         updatingKeyCapture = true
         defer { updatingKeyCapture = false }
@@ -135,10 +233,14 @@ final class RemoteCanvas: UIView, UIGestureRecognizerDelegate, UIPointerInteract
     private func armKeyCaptureFollowUp() {
         guard !keyCaptureArmed else { return }
         keyCaptureArmed = true
-        DispatchQueue.main.async { [weak self] in self?.refreshKeyCapture() }
+        DispatchQueue.main.async { [weak self] in
+            guard let self, !self.menuOpen else { return }
+            self.refreshKeyCapture()
+        }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
             guard let self else { return }
             self.keyCaptureArmed = false
+            guard !self.menuOpen else { return }
             self.refreshKeyCapture()
             let state = self.capture()
             if self.keyCaptureEnabled, state.interfacePresented || state.textInputFocused { self.armKeyCaptureFollowUp() }
@@ -180,6 +282,7 @@ final class RemoteCanvas: UIView, UIGestureRecognizerDelegate, UIPointerInteract
         tap.require(toFail: rightClick)
         drag.require(toFail: rightClick)
         for recognizer in [tap, drag, scroll, rightClick] as [UIGestureRecognizer] {
+            recognizer.delegate = self
             recognizer.allowedTouchTypes = Self.directTouches
             addGestureRecognizer(recognizer)
         }
@@ -397,14 +500,23 @@ final class RemoteCanvas: UIView, UIGestureRecognizerDelegate, UIPointerInteract
         for mask in PointerButtons.click(button) { emit(point, mask) }
     }
     func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive event: UIEvent) -> Bool {
+        if menuOpen { return false }
         guard let press = gestureRecognizer as? PointerPressRecognizer else { return true }
         return event.buttonMask.contains(press.requiredButton)
     }
     func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
+        // While the ⋯ menu is up, a tap belongs to the menu. Recognizing it here clicks the Mac instead.
+        if menuOpen { return false }
         // Scroll events are not touches. Rejecting touches here keeps the wheel pan from delaying a finger drag.
         if let pan = gestureRecognizer as? UIPanGestureRecognizer, pan.maximumNumberOfTouches == 0 { return false }
         if gestureRecognizer is PointerPressRecognizer { return touch.type == .indirectPointer }
         return true
+    }
+    override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
+        if menuOpen, touches.contains(where: { $0.type == .direct || $0.type == .pencil }) {
+            setMenuOpen(false)
+        }
+        super.touchesBegan(touches, with: event)
     }
     func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool {
         pointerRecognizers.contains { $0 === gestureRecognizer } && pointerRecognizers.contains { $0 === other }
@@ -413,7 +525,7 @@ final class RemoteCanvas: UIView, UIGestureRecognizerDelegate, UIPointerInteract
         UIPointerStyle.hidden()
     }
     override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
-        guard capture().forwardsToRemote else { super.pressesBegan(presses, with: event); return }
+        guard !menuOpen, capture().forwardsToRemote else { super.pressesBegan(presses, with: event); return }
         // UIPress sets are unordered: transmit modifiers before the key they modify.
         let ordered = presses.sorted {
             let left = $0.key.map { (224...231).contains($0.keyCode.rawValue) } ?? false
@@ -429,10 +541,12 @@ final class RemoteCanvas: UIView, UIGestureRecognizerDelegate, UIPointerInteract
         }
     }
     override func pressesEnded(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
+        if menuOpen, held.isEmpty { super.pressesEnded(presses, with: event); return }
         guard capture().forwardsToRemote || !held.isEmpty else { super.pressesEnded(presses, with: event); return }
         release(presses)
     }
     override func pressesCancelled(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
+        if menuOpen, held.isEmpty { super.pressesCancelled(presses, with: event); return }
         guard capture().forwardsToRemote || !held.isEmpty else { super.pressesCancelled(presses, with: event); return }
         release(presses)
     }

@@ -8,7 +8,6 @@ struct MacRemoteApp: App {
 
 @MainActor
 final class Session: ObservableObject {
-    @Published var image: UIImage?
     @Published var status = "맥에 연결할 준비가 되었습니다"
     /// Shown on the connect screen until the next attempt. The alert uses the same text.
     @Published var connectionError = ""
@@ -16,8 +15,9 @@ final class Session: ObservableObject {
     @Published var active = false
     @Published var ready = false
     @Published var optionHeld = false
-    @Published var remoteCursor: RemoteCursor?
-    @Published var serverCursorHidden = false
+    /// Latest frame for rotation checks. Not published: publishing it rebuilt the ⋯ menu every frame.
+    private(set) var image: UIImage?
+    let frames = FramePump()
     let display = DisplayController()
     private var displayChanges: AnyCancellable?
     init() {
@@ -69,8 +69,8 @@ final class Session: ObservableObject {
         let previous = client
         client = nil
         if let previous { Task { await previous.close() } }
-        active = false; ready = false; optionHeld = false; image = nil
-        remoteCursor = nil; serverCursorHidden = false
+        active = false; ready = false; optionHeld = false
+        clearPicture()
         pendingRaster = nil; pendingImage = nil; login = nil
         status = "연결을 종료했습니다"
         display.endSession()
@@ -114,7 +114,7 @@ final class Session: ObservableObject {
         self.client = client
         active = true; ready = false; optionHeld = false
         status = reconnect ? "다시 연결하는 중…" : "맥에 연결 중…"
-        if reconnect { remoteCursor = nil; serverCursorHidden = false }
+        if reconnect { frames.setCursor(nil, hidden: false) }
         let host = login.host, port = login.port, username = login.username, password = login.password
         task = Task { [self] in
             var failure: String?
@@ -138,8 +138,8 @@ final class Session: ObservableObject {
                 }, onCursor: { cursor in
                     Task { @MainActor [weak self] in
                         guard let self, self.generation == id, self.resume.acceptsSessionEvents else { return }
-                        if cursor.isHidden { self.serverCursorHidden = true; self.remoteCursor = nil }
-                        else { self.serverCursorHidden = false; self.remoteCursor = cursor }
+                        if cursor.isHidden { self.frames.setCursor(nil, hidden: true) }
+                        else { self.frames.setCursor(cursor, hidden: false) }
                     }
                 })
             } catch is CancellationError {
@@ -155,8 +155,8 @@ final class Session: ObservableObject {
         ready = false; optionHeld = false
         let actions = resume.linkClosed(protocolError ? .protocolError : .transport)
         if !resume.presentsRemote {
-            active = false; image = nil
-            remoteCursor = nil; serverCursorHidden = false
+            active = false
+            clearPicture()
             pendingRaster = nil; pendingImage = nil
             display.endSession()
             if !resume.userEnded {
@@ -245,8 +245,18 @@ final class Session: ObservableObject {
     private func publishFrame() {
         guard let image = pendingImage else { return }
         pendingImage = nil
+        showPicture(image)
+        // @Published fires even when the text is unchanged. Assigning it every frame
+        // invalidated the ⋯ menu and dismissed the popup before a tap could land.
+        if ready, connectionError.isEmpty, status != "맥에 연결됨" { status = "맥에 연결됨" }
+    }
+    private func showPicture(_ image: UIImage?) {
         self.image = image
-        if ready, connectionError.isEmpty { status = "맥에 연결됨" }
+        frames.setImage(image)
+    }
+    private func clearPicture() {
+        image = nil
+        frames.clear()
     }
     nonisolated private static func rasterize(_ frame: Frame) -> UIImage? {
         guard let provider = CGDataProvider(data: frame.rgba as CFData),
@@ -256,6 +266,41 @@ final class Session: ObservableObject {
 }
 
 private final class BackgroundBox { var id: UIBackgroundTaskIdentifier = .invalid }
+
+/// Pushes frames and cursors straight to the canvas so SwiftUI does not rebuild the ⋯ menu.
+final class FramePump {
+    private(set) var image: UIImage?
+    private(set) var cursor: RemoteCursor?
+    private(set) var cursorHidden = false
+    private var onImage: ((UIImage?) -> Void)?
+    private var onCursor: ((RemoteCursor?, Bool) -> Void)?
+
+    func setImage(_ image: UIImage?) {
+        self.image = image
+        onImage?(image)
+    }
+
+    func setCursor(_ cursor: RemoteCursor?, hidden: Bool) {
+        guard cursor != self.cursor || hidden != cursorHidden else { return }
+        self.cursor = cursor
+        self.cursorHidden = hidden
+        onCursor?(cursor, hidden)
+    }
+
+    func clear() {
+        setImage(nil)
+        setCursor(nil, hidden: false)
+    }
+
+    func bind(_ view: RemoteCanvas) {
+        onImage = { [weak view] image in view?.image = image }
+        onCursor = { [weak view] cursor, hidden in view?.applyServerCursor(cursor, hidden: hidden) }
+        guard view.boundPump !== self else { return }
+        view.boundPump = self
+        view.image = image
+        view.applyServerCursor(cursor, hidden: cursorHidden)
+    }
+}
 
 private final class FramePresenter: NSObject {
     var onFrame: (() -> Void)?
@@ -286,15 +331,17 @@ struct RemoteView: View {
     @State private var rotationAlert = false
     @State private var rotationAlertTitle = "화면 회전"
     @State private var rotationAlertText = ""
-    @Environment(\.verticalSizeClass) private var verticalSizeClass
+    @StateObject private var menuGate = MenuGate()
     @Environment(\.scenePhase) private var phase
-    private var fullScreen: Bool { session.active && (verticalSizeClass == .compact || UIDevice.current.userInterfaceIdiom == .pad) }
+    private var menuItems: [SessionMenuItem] {
+        SessionMenuItem.items(optionHeld: session.optionHeld, keyboardShown: keyboard, macIsPortrait: session.display.portrait, fillScreen: fillScreen)
+    }
     var body: some View {
         NavigationStack {
-            if fullScreen {
+            if session.active {
                 VStack(spacing: 0) {
                     ZStack {
-                        ScreenSurface(image: session.image, enabled: session.ready, fill: fillScreen, optionHeld: session.optionHeld, suspendKeyCapture: displaySettings, cursor: session.remoteCursor, cursorHidden: session.serverCursorHidden, key: session.key, pointer: session.pointer)
+                        ScreenSurface(frames: session.frames, enabled: session.ready, fill: fillScreen, optionHeld: session.optionHeld, suspendKeyCapture: displaySettings, menuGate: menuGate, key: session.key, pointer: session.pointer)
                         if !session.ready {
                             VStack(spacing: 8) {
                                 ProgressView()
@@ -307,32 +354,18 @@ struct RemoteView: View {
                         }
                     }
                     .overlay(alignment: .topTrailing) {
-                        Menu {
-                            Button(session.optionHeld ? "⌥ Option 끄기" : "⌥ Option 켜기") { session.toggleOption() }
-                            Button("맥 해상도") { session.display.cancelPendingRotation(); displaySettings = true }
-                            Button(session.display.portrait ? "가로 모드" : "세로 모드", action: togglePortrait)
-                            Button(fillScreen ? "전체 화면 보기" : "화면 채우기") { fillScreen.toggle() }
-                            Button("입력기 전환", action: switchInput)
-                            Button("연결 종료", role: .destructive) { session.disconnect() }
-                        } label: {
-                            Image(systemName: "ellipsis").font(.headline)
-                                .frame(width: 44, height: 44)
-                                .background(.ultraThinMaterial, in: Circle())
-                        }.padding(8)
+                        SessionMenuButton(items: menuItems, gate: menuGate, perform: performMenu)
+                            .frame(width: CGFloat(SessionControls.menuButtonSide), height: CGFloat(SessionControls.menuButtonSide))
+                            .padding(12)
                     }
-                    if session.ready {
-                        sessionControls
-                        if keyboard { TestKeyboard(session: session).padding(.bottom, 4) }
-                    }
+                    if session.ready, keyboard { TestKeyboard(session: session).padding(.bottom, 4) }
                 }
                 .background(.black)
                 .toolbar(.hidden, for: .navigationBar)
                 .statusBarHidden()
                 .persistentSystemOverlays(.hidden)
             } else {
-
-            VStack(spacing: 12) {
-                if !session.active {
+                VStack(spacing: 12) {
                     Form {
                         Section("접속할 맥") {
                             TextField("IP 주소 또는 Mac.local", text: $host)
@@ -375,23 +408,11 @@ struct RemoteView: View {
                         guard !Task.isCancelled, !session.active else { return }
                         focusedField = ConnectFocus.field(host: host, port: port, username: username, password: password)
                     }
-                } else {
-                    ScreenSurface(image: session.image, enabled: session.ready, optionHeld: session.optionHeld, suspendKeyCapture: displaySettings, cursor: session.remoteCursor, cursorHidden: session.serverCursorHidden, key: session.key, pointer: session.pointer)
-                        .background(.black).clipShape(RoundedRectangle(cornerRadius: 12))
-                    if session.ready {
-                        sessionControls
-                        if keyboard { TestKeyboard(session: session) }
-                    }
+                    Text(session.status).font(.footnote).foregroundStyle(.secondary).padding(.horizontal)
                 }
-                Text(session.status).font(.footnote).foregroundStyle(.secondary).padding(.horizontal)
-                if session.active && !session.ready { ProgressView() }
-            }
-            .padding(.bottom, 8)
-            .navigationTitle("Specula")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                if session.active { Button("연결 종료") { session.disconnect() } }
-            }
+                .padding(.bottom, 8)
+                .navigationTitle("Specula")
+                .navigationBarTitleDisplayMode(.inline)
             }
         }
         .sheet(isPresented: $displaySettings, onDismiss: {
@@ -409,37 +430,18 @@ struct RemoteView: View {
             Text(rotationAlertText)
         }
     }
-    /// One stable row. Do not swap layouts from the offered width; that loop froze the resolution sheet.
-    private var sessionControls: some View {
-        HStack(spacing: CGFloat(SessionControls.buttonSpacing)) {
-            keyboardControl
-            controlButton(SessionControls.input, label: "입력기 전환", action: switchInput)
-            Spacer(minLength: CGFloat(SessionControls.buttonSpacing))
-            controlButton(SessionControls.resolution, label: "해상도") {
-                session.display.cancelPendingRotation()
-                displaySettings = true
-            }
-            controlButton(SessionControls.orientation(macIsPortrait: session.display.portrait), label: session.display.portrait ? "가로 모드" : "세로 모드", action: togglePortrait)
+    private func performMenu(_ item: SessionMenuItem) {
+        switch item {
+        case .option: session.toggleOption()
+        case .keyboard: keyboard.toggle()
+        case .input: switchInput()
+        case .resolution:
+            session.display.cancelPendingRotation()
+            displaySettings = true
+        case .orientation: togglePortrait()
+        case .fill: fillScreen.toggle()
+        case .disconnect: session.disconnect()
         }
-        .padding(.horizontal, CGFloat(SessionControls.horizontalInset))
-        .padding(.vertical, 4)
-    }
-    private var keyboardControl: some View {
-        controlButton(SessionControls.keyboard, label: keyboard ? "키보드 숨기기" : "키보드 표시") { keyboard.toggle() }
-            .fontWeight(keyboard ? .semibold : .regular)
-    }
-    private func controlButton(_ title: String, label: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Text(title)
-                .font(.system(size: CGFloat(SessionControls.labelPointSize)))
-                .lineLimit(1)
-                .minimumScaleFactor(0.7)
-                .padding(.horizontal, CGFloat(SessionControls.labelPadding))
-                .frame(minWidth: CGFloat(SessionControls.minimumHit), minHeight: CGFloat(SessionControls.minimumHit))
-                .contentShape(Rectangle())
-        }
-        .buttonStyle(.borderless)
-        .accessibilityLabel(label)
     }
     private func switchInput() {
         session.key(0xffe3, down: true); session.stroke(32); session.key(0xffe3, down: false)
@@ -519,5 +521,112 @@ struct TestKeyboard: View {
             if shift { session.key(0xffe1, down: false) }
             if command { session.key(0xffeb, down: false) }
         }
+    }
+}
+
+/// UIKit menu. SwiftUI's Menu is recreated whenever its parent invalidates, which blinked the popup.
+private struct SessionMenuButton: UIViewRepresentable {
+    var items: [SessionMenuItem]
+    var gate: MenuGate
+    var perform: (SessionMenuItem) -> Void
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
+    func makeUIView(context: Context) -> EllipsisButton {
+        let button = EllipsisButton()
+        button.bridge = context.coordinator
+        context.coordinator.bind(items: items, gate: gate, perform: perform, button: button)
+        return button
+    }
+
+    func updateUIView(_ button: EllipsisButton, context: Context) {
+        button.bridge = context.coordinator
+        context.coordinator.bind(items: items, gate: gate, perform: perform, button: button)
+    }
+
+    func sizeThatFits(_ proposal: ProposedViewSize, uiView: EllipsisButton, context: Context) -> CGSize? {
+        let side = CGFloat(SessionControls.menuButtonSide)
+        return CGSize(width: side, height: side)
+    }
+
+    final class Coordinator {
+        private var items: [SessionMenuItem] = []
+        private var perform: (SessionMenuItem) -> Void = { _ in }
+        private var gate: MenuGate?
+        func bind(items: [SessionMenuItem], gate: MenuGate, perform: @escaping (SessionMenuItem) -> Void, button: EllipsisButton) {
+            self.perform = perform
+            self.gate = gate
+            guard items != self.items else { return }
+            self.items = items
+            button.menu = Self.menu(items: items) { [weak self] item in
+                self?.gate?.menuEnded()
+                self?.perform(item)
+            }
+        }
+        func menuBegan() { gate?.menuBegan() }
+        private static func menu(items: [SessionMenuItem], select: @escaping (SessionMenuItem) -> Void) -> UIMenu {
+            let sections = Dictionary(grouping: items, by: \.section).keys.sorted().map { section in
+                UIMenu(options: .displayInline, children: items.filter { $0.section == section }.map { item in
+                    let attributes: UIMenuElement.Attributes = item.isDestructive ? .destructive : []
+                    return UIAction(title: item.title, attributes: attributes) { _ in select(item) }
+                })
+            }
+            return UIMenu(title: "", children: sections)
+        }
+    }
+}
+
+private final class EllipsisButton: UIButton {
+    weak var bridge: SessionMenuButton.Coordinator?
+    private let side = CGFloat(SessionControls.menuButtonSide)
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        var config = UIButton.Configuration.plain()
+        let symbol = UIImage.SymbolConfiguration(pointSize: CGFloat(SessionControls.menuGlyphPointSize), weight: .bold)
+        let image = UIImage(systemName: "ellipsis", withConfiguration: symbol)
+        config.image = image
+        config.baseForegroundColor = .label
+        config.cornerStyle = .capsule
+        config.contentInsets = .zero
+        config.background.visualEffect = UIBlurEffect(style: .systemUltraThinMaterial)
+        config.background.strokeWidth = 1
+        config.background.strokeColor = UIColor.label.withAlphaComponent(0.45)
+        configuration = config
+        showsMenuAsPrimaryAction = true
+        isExclusiveTouch = true
+        addTarget(self, action: #selector(didTouchDown), for: .touchDown)
+        accessibilityLabel = "제어 메뉴"
+        accessibilityHint = "Option, 키보드, 입력기, 해상도, 화면, 연결 종료"
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    override var intrinsicContentSize: CGSize { CGSize(width: side, height: side) }
+
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        guard window != nil else { return }
+        applyReadableMenuText()
+    }
+
+    override func beginTracking(_ touch: UITouch, with event: UIEvent?) -> Bool {
+        bridge?.menuBegan()
+        return super.beginTracking(touch, with: event)
+    }
+
+    @objc private func didTouchDown() { bridge?.menuBegan() }
+
+    private func applyReadableMenuText() {
+        let order: [UIContentSizeCategory] = [
+            .extraSmall, .small, .medium, .large, .extraLarge, .extraExtraLarge, .extraExtraExtraLarge,
+            .accessibilityMedium, .accessibilityLarge, .accessibilityExtraLarge,
+            .accessibilityExtraExtraLarge, .accessibilityExtraExtraExtraLarge
+        ]
+        let current = traitCollection.preferredContentSizeCategory
+        guard let currentIndex = order.firstIndex(of: current),
+              let floorIndex = order.firstIndex(of: .extraExtraLarge),
+              currentIndex < floorIndex else { return }
+        traitOverrides.preferredContentSizeCategory = .extraExtraLarge
     }
 }
