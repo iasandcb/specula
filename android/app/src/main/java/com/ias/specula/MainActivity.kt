@@ -8,16 +8,20 @@ import androidx.activity.compose.LocalActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.paneTitle
 import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.*
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -43,7 +47,7 @@ class MainActivity : ComponentActivity() {
             session.commandTab.release()
             switcherDismissKeys.add(event.keyCode)
         }
-        // Consume both halves so Enter cannot reactivate a focused toolbar button,
+        // Consume both halves so Enter cannot reactivate a focused session button,
         // or reach the selected Mac app with no matching key-down.
         if (event.keyCode in switcherDismissKeys) {
             if (event.action == KeyEvent.ACTION_UP) switcherDismissKeys.remove(event.keyCode)
@@ -82,89 +86,19 @@ private fun Specula(model: SessionModel = viewModel()) {
     }
     Column(Modifier.fillMaxSize().safeDrawingPadding().imePadding()) {
         if (model.connected) {
-            AndroidView(
-                factory = { context ->
-                    RemoteSurface(context).also {
-                        surface = it
-                        it.onRemoteTouch = model.commandTab::release
-                        it.pointer = model::pointer
-                        it.key = model::key
-                        it.text = model::text
-                        it.post {
-                            it.requestFocus()
-                            it.showKeyboard(false)
-                        }
-                    }
-                },
-                update = { it.frame = model.bitmap },
-                modifier = Modifier.weight(1f).fillMaxWidth(),
-            )
-            // One row, with extra width for the input-source label. Scroll only on unusually
-            // narrow windows to preserve all five controls' 48dp minimum touch width.
-            val landscape = androidx.compose.ui.platform.LocalConfiguration.current.orientation ==
-                android.content.res.Configuration.ORIENTATION_LANDSCAPE
-            BoxWithConstraints(Modifier.fillMaxWidth()) {
-                val toolbarWidth = maxOf(maxWidth, 312.dp)
-                Row(
-                    Modifier.horizontalScroll(rememberScrollState())
-                        .width(toolbarWidth)
-                        .padding(horizontal = 4.dp),
-                    horizontalArrangement = Arrangement.spacedBy(4.dp),
-                ) {
-                    @Composable
-                    fun Control(
-                        title: String,
-                        enabled: Boolean = true,
-                        weight: Float = 1f,
-                        appSwitcher: Boolean = false,
-                        action: () -> Unit,
-                    ) {
-                        TextButton(
-                            onClick = {
-                                if (!appSwitcher) model.commandTab.release()
-                                action()
-                            },
-                            enabled = enabled,
-                            colors = ButtonDefaults.textButtonColors(
-                                containerColor = if (appSwitcher && model.commandTab.held)
-                                    MaterialTheme.colorScheme.primaryContainer
-                                else androidx.compose.ui.graphics.Color.Transparent,
-                            ),
-                            modifier = Modifier.semantics {
-                                if (appSwitcher) selected = model.commandTab.held
-                            }.weight(weight)
-                                .height(if (landscape) 48.dp else 72.dp)
-                                .widthIn(min = 48.dp),
-                            contentPadding = PaddingValues(2.dp),
-                        ) {
-                            Text(
-                                title,
-                                fontSize = 18.sp,
-                                maxLines = if (landscape) 1 else 2,
-                                textAlign = androidx.compose.ui.text.style.TextAlign.Center,
-                            )
-                        }
-                    }
-                    Control("키보드") {
+            Box(Modifier.weight(1f).fillMaxWidth()) {
+                RemoteScreen(model) { surface = it }
+                SessionControls(
+                    model = model,
+                    onKeyboard = {
                         keyboard = !keyboard
                         surface?.showKeyboard(keyboard)
-                    }
-                    Control(
-                        if (landscape) "⌃Space 입력기" else "⌃Space\n입력기",
-                        weight = 2f,
-                    ) { model.inputSource() }
-                    Control("⌘Tab", appSwitcher = true) { model.commandTab.tap() }
-                    Control("해상도", !model.busy) {
-                        surface?.showKeyboard(false)
+                    },
+                    hideKeyboard = {
                         keyboard = false
-                        model.modes()
-                    }
-                    Control(if (model.portrait) "가로" else "세로", !model.busy) {
                         surface?.showKeyboard(false)
-                        keyboard = false
-                        model.rotate()
-                    }
-                }
+                    },
+                )
             }
         } else {
             Column(
@@ -292,5 +226,123 @@ private fun Specula(model: SessionModel = viewModel()) {
                 TextButton(onClick = { model.closeSettings() }) { Text("닫기", fontSize = 20.sp) }
             },
         )
+    }
+}
+
+/** Bitmap reads stay in AndroidView's update scope, never in the controls' composition. */
+@Composable
+private fun RemoteScreen(model: SessionModel, onSurface: (RemoteSurface) -> Unit) {
+    AndroidView(
+        factory = { context ->
+            RemoteSurface(context).also {
+                onSurface(it)
+                it.onRemoteTouch = model.commandTab::release
+                it.pointer = model::pointer
+                it.key = model::key
+                it.text = model::text
+                it.post {
+                    it.requestFocus()
+                    it.showKeyboard(false)
+                }
+            }
+        },
+        update = { it.frame = model.bitmap },
+        modifier = Modifier.fillMaxSize(),
+    )
+}
+
+/** An in-window menu keeps physical key dispatch on the Activity/RemoteSurface path. */
+@Composable
+private fun SessionControls(
+    model: SessionModel,
+    onKeyboard: () -> Unit,
+    hideKeyboard: () -> Unit,
+) {
+    // This state belongs to the connected overlay, independent of framebuffer updates.
+    var expanded by remember { mutableStateOf(false) }
+    Box(Modifier.fillMaxSize()) {
+        FilledTonalButton(
+            onClick = { expanded = true }, // Opening the menu must keep Command held.
+            modifier = Modifier.align(Alignment.TopEnd).padding(8.dp).size(56.dp),
+            contentPadding = PaddingValues(0.dp),
+        ) {
+            Text("⋯", fontSize = 32.sp, modifier = Modifier.semantics {
+                // Give TalkBack a useful name for the glyph.
+                contentDescription = "세션 메뉴"
+            })
+        }
+        if (model.commandTab.held) {
+            Column(
+                Modifier.align(Alignment.TopStart).padding(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                FilledTonalButton(
+                    onClick = { model.commandTab.tap() },
+                    modifier = Modifier.widthIn(min = 56.dp).heightIn(min = 56.dp)
+                        .semantics { selected = true },
+                ) { Text("Tab", fontSize = 20.sp) }
+                FilledTonalButton(
+                    onClick = { model.commandTab.release() },
+                    modifier = Modifier.widthIn(min = 56.dp).heightIn(min = 56.dp),
+                ) { Text("⌘ 해제", fontSize = 20.sp) }
+            }
+        }
+        if (expanded) {
+            BackHandler { expanded = false }
+            // A sibling above AndroidView consumes the entire outside gesture, including
+            // its up event after dismissal. No remote click or Command release leaks through.
+            Box(
+                Modifier.fillMaxSize().clickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null,
+                    onClickLabel = "메뉴 닫기",
+                    onClick = { expanded = false },
+                ),
+            )
+            Surface(
+                modifier = Modifier.align(Alignment.TopEnd).padding(
+                    top = 72.dp, start = 8.dp, end = 8.dp, bottom = 8.dp,
+                ).width(260.dp).semantics { paneTitle = "세션 메뉴" },
+                shape = MaterialTheme.shapes.medium,
+                tonalElevation = 6.dp,
+                shadowElevation = 6.dp,
+            ) {
+                Column(Modifier.verticalScroll(rememberScrollState()).padding(vertical = 8.dp)) {
+                    @Composable
+                    fun Item(
+                        title: String,
+                        enabled: Boolean = true,
+                        appSwitcher: Boolean = false,
+                        action: () -> Unit,
+                    ) {
+                        DropdownMenuItem(
+                            text = { Text(title, fontSize = 20.sp) },
+                            enabled = enabled,
+                            modifier = Modifier.heightIn(min = 56.dp),
+                            onClick = {
+                                expanded = false
+                                if (!appSwitcher) model.commandTab.release()
+                                action()
+                            },
+                        )
+                    }
+                    Item("키보드") { onKeyboard() }
+                    Item("⌃Space 입력기") { model.inputSource() }
+                    Item("⌘Tab", appSwitcher = true) { model.commandTab.tap() }
+                    Item("해상도", enabled = !model.busy) {
+                        hideKeyboard()
+                        model.modes()
+                    }
+                    Item(if (model.portrait) "가로" else "세로", enabled = !model.busy) {
+                        hideKeyboard()
+                        model.rotate()
+                    }
+                    Item("연결 끊기") {
+                        hideKeyboard()
+                        model.disconnect()
+                    }
+                }
+            }
+        }
     }
 }

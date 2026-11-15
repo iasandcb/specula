@@ -66,13 +66,21 @@ the helper. The helper is optional for remote viewing and input.
   release or cancellation releases the button.
 - Two-finger tap: right click. Two-finger pinch: zoom, up to 8×. Move both fingers
   to pan the viewport. Screen rotation/resizing resets the viewport to fit.
-- The bottom toolbar has five controls in one row, each at least 48dp wide.
-  Landscape uses one-line labels and a 48dp height; portrait permits two-line
-  labels and uses a 72dp height. Narrow windows can scroll the row. **세로** /
-  **가로** names the next orientation. **⌘Tab** holds Command and sends Tab after a 40 ms modifier gap to show the
-  Mac app switcher. The highlighted button sends another Tab on each further tap.
-  Touching the remote screen, using another toolbar control, pressing hardware
-  Enter/Escape, backgrounding the app, or disconnecting releases Command.
+- The remote screen fills the available space in portrait and landscape, with no
+  bottom toolbar. The top-right **⋯** button has a 56 × 56dp touch target and opens
+  a menu with 20sp text and items at least 56dp tall: **키보드**, **⌃Space 입력기**,
+  **⌘Tab**, **해상도**, **세로** / **가로**, and **연결 끊기**. The orientation label
+  names the next orientation. The menu scrolls on short screens. Outside taps
+  only dismiss it; menu touches never click the Mac.
+- Framebuffer state is read only in the remote AndroidView update scope. The
+  sibling overlay owns menu state, so incoming frames do not restart the menu.
+  The menu stays in the Activity window to preserve physical-key dispatch.
+- **⌘Tab** holds Command and sends Tab after a 40 ms modifier gap to show the
+  Mac app switcher. Choosing it again sends only another Tab. While Command is
+  held, large **Tab** and **⌘ 해제** controls appear at the top-left for repeat and
+  release. Opening or dismissing **⋯** keeps Command held. Touching the remote
+  screen, choosing another menu action, pressing hardware Enter/Escape,
+  backgrounding the app, or disconnecting releases Command.
 - **키보드** toggles the Android IME. Soft-keyboard composition stays local until
   `commitText`; committed text and virtual Enter/backspace go to the Mac.
   Physical keyboard events are consumed in `onKeyPreIme` before Android's IME,
@@ -81,10 +89,10 @@ the helper. The helper is optional for remote viewing and input.
   live, independent of the Android keyboard layout. Both Alt keys send Command
   (`Super_L`, `0xffeb`); both Windows/Meta keys send Option (`Meta_L`, `0xffe7`),
   matching the Swift client's Mac keysyms. Ctrl remains Control. Android intercepts
-  Alt+Tab and Meta+Tab; use **⌘Tab** for remote app switching. The input-source
-  button sends Control-down, Space-down/up, Control-up.
-- Back hides the keyboard first, then disconnects. Connection survives Activity
-  recreation through a ViewModel. The display helper receives a heartbeat every
+  Alt+Tab and Meta+Tab; use **⌘Tab** for remote app switching. The **⌃Space 입력기**
+  menu item sends Control-down, Space-down/up, Control-up.
+- Back dismisses an open menu; otherwise it hides the keyboard first, then
+  disconnects. Connection survives Activity recreation through a ViewModel. The display helper receives a heartbeat every
   15 seconds and a best-effort restore on disconnect; its existing 60-second
   lease restores resolution if the process or network disappears.
 
@@ -134,14 +142,16 @@ client does not port iOS-specific session-resume or mouse cursor UI behavior.
 Using the JDK 17 and SDK/cache environment variables above:
 
 ```text
-./gradlew assembleDebug testDebugUnitTest lintDebug --console=plain
-BUILD SUCCESSFUL in 12s
-51 actionable tasks: 20 executed, 31 up-to-date
-22 JVM tests, 0 failures, 0 errors, 0 skipped
-Lint: 0 errors, 7 warnings
+./gradlew assembleDebug testDebugUnitTest --console=plain
+BUILD SUCCESSFUL
+29 JVM tests, 0 failures, 0 errors, 0 skipped
 ```
 
-Lint warnings concern three pinned dependency versions, protocol-required DES/AES
+An additional `lintDebug` run reports 3 existing `RestrictedApi` errors in the
+Activity's unchanged `dispatchKeyEvent` override/super call, plus 7 warnings.
+The warnings concern three pinned dependency versions, protocol-required DES/AES
 ECB, the legacy backup attribute recommendation (backup is disabled), and a
-Canvas KTX style suggestion. The Swift and Android capture copies have identical
-SHA-256 `2a22270d73ee18fb9488f416f415d4f3c7a3b6c67e4341b07c1e883296063001`.
+Canvas KTX style suggestion. No device/emulator was connected for interactive
+overflow-menu, touch, or IME validation. The Swift and Android capture copies
+have identical SHA-256
+`2a22270d73ee18fb9488f416f415d4f3c7a3b6c67e4341b07c1e883296063001`.
