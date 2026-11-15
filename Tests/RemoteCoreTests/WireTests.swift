@@ -48,25 +48,52 @@ final class WireTests: XCTestCase {
         XCTAssertEqual(PhysicalKey.symbol(hid: 80, option: true), 0xff51)
     }
     func testKeyboardCaptureYieldsToSheetsAlertsAndTextFieldsThenResumes() {
-        let connected = KeyboardCapture(enabled: true, interfacePresented: false, textInputFocused: false, isFirstResponder: true)
+        let connected = KeyboardCapture(enabled: true, interfacePresented: false, textInputFocused: false, isFirstResponder: true, hardwareKeyboardConnected: true)
         XCTAssertTrue(connected.forwardsToRemote)
+        XCTAssertTrue(connected.takesFirstResponder)
         XCTAssertEqual(connected.action, .stay)
-        XCTAssertEqual(KeyboardCapture(enabled: true, interfacePresented: false, textInputFocused: false, isFirstResponder: false).action, .become)
+        XCTAssertEqual(KeyboardCapture(enabled: true, interfacePresented: false, textInputFocused: false, isFirstResponder: false, hardwareKeyboardConnected: true).action, .become)
 
-        let sheet = KeyboardCapture(enabled: true, interfacePresented: true, textInputFocused: false, isFirstResponder: true)
+        let sheet = KeyboardCapture(enabled: true, interfacePresented: true, textInputFocused: false, isFirstResponder: true, hardwareKeyboardConnected: true)
         XCTAssertFalse(sheet.forwardsToRemote)
+        XCTAssertFalse(sheet.takesFirstResponder)
         XCTAssertEqual(sheet.action, .resign)
-        let typing = KeyboardCapture(enabled: true, interfacePresented: true, textInputFocused: true, isFirstResponder: false)
+        let typing = KeyboardCapture(enabled: true, interfacePresented: true, textInputFocused: true, isFirstResponder: false, hardwareKeyboardConnected: true)
         XCTAssertFalse(typing.forwardsToRemote)
         XCTAssertEqual(typing.action, .stay)
-        let field = KeyboardCapture(enabled: true, interfacePresented: false, textInputFocused: true, isFirstResponder: false)
+        let field = KeyboardCapture(enabled: true, interfacePresented: false, textInputFocused: true, isFirstResponder: false, hardwareKeyboardConnected: true)
         XCTAssertFalse(field.forwardsToRemote)
         XCTAssertEqual(field.action, .stay)
 
-        let resumed = KeyboardCapture(enabled: true, interfacePresented: false, textInputFocused: false, isFirstResponder: false)
+        let resumed = KeyboardCapture(enabled: true, interfacePresented: false, textInputFocused: false, isFirstResponder: false, hardwareKeyboardConnected: true)
         XCTAssertTrue(resumed.forwardsToRemote)
+        XCTAssertTrue(resumed.takesFirstResponder)
         XCTAssertEqual(resumed.action, .become)
-        XCTAssertEqual(KeyboardCapture(enabled: false, interfacePresented: false, textInputFocused: false, isFirstResponder: true).action, .resign)
+        XCTAssertEqual(KeyboardCapture(enabled: false, interfacePresented: false, textInputFocused: false, isFirstResponder: true, hardwareKeyboardConnected: true).action, .resign)
+    }
+    func testKeyboardCaptureDoesNotBecomeFirstResponderWithoutHardwareKeyboard() {
+        // The landscape ellipsis menu toggles interfacePresented. Becoming first responder
+        // then presents the software keyboard, so stay out of the responder chain.
+        let idle = KeyboardCapture(enabled: true, interfacePresented: false, textInputFocused: false, isFirstResponder: false, hardwareKeyboardConnected: false)
+        XCTAssertTrue(idle.forwardsToRemote)
+        XCTAssertFalse(idle.takesFirstResponder)
+        XCTAssertEqual(idle.action, .stay)
+
+        let menuOpen = KeyboardCapture(enabled: true, interfacePresented: true, textInputFocused: false, isFirstResponder: false, hardwareKeyboardConnected: false)
+        XCTAssertEqual(menuOpen.action, .stay)
+        let menuClosed = KeyboardCapture(enabled: true, interfacePresented: false, textInputFocused: false, isFirstResponder: false, hardwareKeyboardConnected: false)
+        XCTAssertEqual(menuClosed.action, .stay)
+
+        let disconnect = KeyboardCapture(enabled: true, interfacePresented: false, textInputFocused: false, isFirstResponder: true, hardwareKeyboardConnected: false)
+        XCTAssertFalse(disconnect.takesFirstResponder)
+        XCTAssertEqual(disconnect.action, .resign)
+
+        let field = KeyboardCapture(enabled: true, interfacePresented: false, textInputFocused: true, isFirstResponder: false, hardwareKeyboardConnected: false)
+        XCTAssertFalse(field.forwardsToRemote)
+        XCTAssertEqual(field.action, .stay)
+        let attachedDuringSheet = KeyboardCapture(enabled: true, interfacePresented: true, textInputFocused: false, isFirstResponder: false, hardwareKeyboardConnected: true)
+        XCTAssertFalse(attachedDuringSheet.takesFirstResponder)
+        XCTAssertEqual(attachedDuringSheet.action, .stay)
     }
     func testPhysicalPositionsRemainLatinForMacIME() {
         // Korean ㄱ occupies the US R position; never transmit composed Korean here.

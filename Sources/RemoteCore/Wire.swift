@@ -68,23 +68,30 @@ public enum Wire {
     }
 }
 
-/// Whether the remote screen should take hardware and software keys.
+/// Whether the remote screen should take hardware keys.
 /// A presented sheet or alert, or a focused text field, keeps typing in the app.
+/// First-responder capture waits for a hardware keyboard. Without one, becoming
+/// first responder presents the iPhone software keyboard.
 public struct KeyboardCapture: Equatable {
     public enum Action: Equatable { case become, resign, stay }
     public var enabled: Bool
     public var interfacePresented: Bool
     public var textInputFocused: Bool
     public var isFirstResponder: Bool
-    public init(enabled: Bool, interfacePresented: Bool, textInputFocused: Bool, isFirstResponder: Bool) {
+    public var hardwareKeyboardConnected: Bool
+    public init(enabled: Bool, interfacePresented: Bool, textInputFocused: Bool, isFirstResponder: Bool, hardwareKeyboardConnected: Bool) {
         self.enabled = enabled
         self.interfacePresented = interfacePresented
         self.textInputFocused = textInputFocused
         self.isFirstResponder = isFirstResponder
+        self.hardwareKeyboardConnected = hardwareKeyboardConnected
     }
+    /// Presses that reach this view are sent to the Mac even if first responder was not taken here.
     public var forwardsToRemote: Bool { enabled && !interfacePresented && !textInputFocused }
+    /// Own first responder only while a hardware keyboard is attached.
+    public var takesFirstResponder: Bool { forwardsToRemote && hardwareKeyboardConnected }
     public var action: Action {
-        if forwardsToRemote { return isFirstResponder ? .stay : .become }
+        if takesFirstResponder { return isFirstResponder ? .stay : .become }
         return isFirstResponder ? .resign : .stay
     }
 }

@@ -1,3 +1,4 @@
+import GameController
 import SwiftUI
 
 struct ScreenSurface: UIViewRepresentable {
@@ -41,6 +42,10 @@ final class RemoteCanvas: UIView, UIGestureRecognizerDelegate, UIPointerInteract
     private var allowKeyCapture = false
     private var keyCaptureArmed = false
     private var updatingKeyCapture = false
+    /// Set before becomeFirstResponder so UIKit presents these instead of the system keyboard.
+    private var softwareKeyboardSuppressed = false
+    private let captureInputView = SuppressedInputView()
+    private let captureAccessoryView = SuppressedInputView()
     private var pointerPresses: [PointerPressRecognizer] = []
     private var pointerRecognizers: [UIGestureRecognizer] = []
     private var wheelPendingX: Double = 0
@@ -57,6 +62,8 @@ final class RemoteCanvas: UIView, UIGestureRecognizerDelegate, UIPointerInteract
     private static let localArrow = LocalArrow.make()
     // Cached so UIKit can ask during a responder transition without walking the chain.
     override var canBecomeFirstResponder: Bool { allowKeyCapture }
+    override var inputView: UIView? { softwareKeyboardSuppressed ? captureInputView : nil }
+    override var inputAccessoryView: UIView? { softwareKeyboardSuppressed ? captureAccessoryView : nil }
     /// Finger and Pencil stay on the original gestures. Pointer clicks are a different touch type
     /// once UIApplicationSupportsIndirectInputEvents is set, so a mouse-down is not a long press.
     private static let directTouches = [
@@ -78,10 +85,14 @@ final class RemoteCanvas: UIView, UIGestureRecognizerDelegate, UIPointerInteract
         refreshKeyCapture()
         armKeyCaptureFollowUp()
     }
+    @objc private func hardwareKeyboardChanged() {
+        refreshKeyCapture()
+        armKeyCaptureFollowUp()
+    }
     private func capture() -> KeyboardCapture {
         let presented = suspendKeyCapture || interfacePresented
         let textFocused = !presented && !isFirstResponder && Self.hasFocusedTextInput(window)
-        return KeyboardCapture(enabled: keyCaptureEnabled && window != nil, interfacePresented: presented, textInputFocused: textFocused, isFirstResponder: isFirstResponder)
+        return KeyboardCapture(enabled: keyCaptureEnabled && window != nil, interfacePresented: presented, textInputFocused: textFocused, isFirstResponder: isFirstResponder, hardwareKeyboardConnected: GCKeyboard.coalesced != nil)
     }
     private var interfacePresented: Bool {
         if let root = window?.rootViewController, Self.presentsInterface(root) { return true }
@@ -105,12 +116,21 @@ final class RemoteCanvas: UIView, UIGestureRecognizerDelegate, UIPointerInteract
         updatingKeyCapture = true
         defer { updatingKeyCapture = false }
         let state = capture()
-        allowKeyCapture = state.forwardsToRemote
+        // The ⋯ menu presents and dismisses a controller, which toggles interfacePresented.
+        // Become first responder only for an attached hardware keyboard, and give UIKit an
+        // empty input view so that transition cannot raise the software keyboard.
+        if state.takesFirstResponder {
+            let showEmptyInput = !softwareKeyboardSuppressed
+            softwareKeyboardSuppressed = true
+            if showEmptyInput, isFirstResponder { reloadInputViews() }
+        }
+        allowKeyCapture = state.takesFirstResponder
         switch state.action {
         case .become: becomeFirstResponder()
         case .resign: resignFirstResponder()
         case .stay: break
         }
+        if !state.takesFirstResponder, !isFirstResponder { softwareKeyboardSuppressed = false }
     }
     private func armKeyCaptureFollowUp() {
         guard !keyCaptureArmed else { return }
@@ -141,6 +161,8 @@ final class RemoteCanvas: UIView, UIGestureRecognizerDelegate, UIPointerInteract
         for name in [UITextField.textDidBeginEditingNotification, UITextField.textDidEndEditingNotification, UITextView.textDidBeginEditingNotification, UITextView.textDidEndEditingNotification] {
             center.addObserver(self, selector: #selector(textInputChanged), name: name, object: nil)
         }
+        center.addObserver(self, selector: #selector(hardwareKeyboardChanged), name: .GCKeyboardDidConnect, object: nil)
+        center.addObserver(self, selector: #selector(hardwareKeyboardChanged), name: .GCKeyboardDidDisconnect, object: nil)
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
     deinit { NotificationCenter.default.removeObserver(self) }
@@ -427,6 +449,19 @@ final class RemoteCanvas: UIView, UIGestureRecognizerDelegate, UIPointerInteract
         held.values.forEach { key?($0, false) }; held.removeAll()
         return super.resignFirstResponder()
     }
+}
+
+/// Empty stand-in for the system keyboard. A zero intrinsic height keeps UIKit from reserving keyboard space.
+private final class SuppressedInputView: UIView {
+    override init(frame: CGRect) {
+        super.init(frame: .zero)
+        isUserInteractionEnabled = false
+        backgroundColor = .clear
+        autoresizingMask = []
+    }
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+    override var intrinsicContentSize: CGSize { CGSize(width: UIView.noIntrinsicMetric, height: 0) }
+    override func sizeThatFits(_ size: CGSize) -> CGSize { .zero }
 }
 
 private enum LocalArrow {
