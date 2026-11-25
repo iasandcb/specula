@@ -1,7 +1,15 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
     id("org.jetbrains.kotlin.plugin.compose")
+}
+
+val releaseKeystoreProperties: Properties? = run {
+    val propsFile = File(System.getProperty("user.home"), ".config/specula/keystore.properties")
+    if (!propsFile.isFile) null
+    else Properties().apply { propsFile.reader(Charsets.UTF_8).use { load(it) } }
 }
 
 android {
@@ -12,7 +20,25 @@ android {
         minSdk = 26
         targetSdk = 35
         versionCode = 1
-        versionName = "1.0"
+        versionName = "1.0.0"
+    }
+    signingConfigs {
+        create("release") {
+            val props = releaseKeystoreProperties ?: return@create
+            storeFile = file(props.getProperty("storeFile"))
+            storePassword = props.getProperty("storePassword")
+            keyAlias = props.getProperty("keyAlias")
+            keyPassword = props.getProperty("keyPassword")
+        }
+    }
+    buildTypes {
+        release {
+            isMinifyEnabled = false
+            val cfg = signingConfigs.getByName("release")
+            if (cfg.storeFile != null) {
+                signingConfig = cfg
+            }
+        }
     }
     buildFeatures { compose = true }
     compileOptions {
