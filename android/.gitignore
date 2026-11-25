@@ -1,0 +1,9 @@
+.gradle/
+.kotlin/
+**/build/
+local.properties
+
+# Release signing material (kept outside the repo; never commit)
+*.jks
+*.keystore
+keystore.properties
