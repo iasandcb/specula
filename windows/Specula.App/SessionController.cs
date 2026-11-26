@@ -189,6 +189,16 @@ public sealed class SessionController : IDisposable
 
     public void ReleasePhysicalKeys() => Send(_keys.ReleasePhysical());
 
+    /// <summary>The window lost the foreground. Every held key goes up so the Mac does not keep Shift or Alt.</summary>
+    public void ReleaseForFocusLoss()
+    {
+        if (!Ready) return;
+        var strokes = _keys.ReleaseAll();
+        if (strokes.Count == 0) return;
+        Send(strokes);
+        Notify();
+    }
+
     public void ToggleSoftwareOption()
     {
         if (!Ready) return;

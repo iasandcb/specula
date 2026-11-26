@@ -3,9 +3,9 @@ using System.Runtime.InteropServices;
 namespace Specula;
 
 /// <summary>
-/// Low-level hook installed while the session is connected. It runs before the IME, so Shift and
-/// the other modifiers are forwarded as raw scan codes. Swallowing the key keeps the Windows
-/// key, Alt+Tab, and Ctrl+Esc inside the remote session.
+/// Low-level hook installed while a session is connected. The hook is global, so the callback
+/// decides per key whether Specula is the foreground window. Keys are swallowed only then, and
+/// only so the IME cannot eat Shift before the remote view sees it.
 /// </summary>
 public sealed class WinKeyHook : IDisposable
 {
@@ -34,6 +34,8 @@ public sealed class WinKeyHook : IDisposable
         UnhookWindowsHookEx(_hook);
         _hook = IntPtr.Zero;
     }
+
+    public bool IsInstalled => _hook != IntPtr.Zero;
 
     public void Dispose() => Uninstall();
 

@@ -18,6 +18,9 @@ public partial class MainWindow : Window
     bool _menuOpen;
     DisplaySnapshot? _shownModes;
 
+    bool _altDown;
+    bool _wasSettings;
+
     public MainWindow()
     {
         InitializeComponent();
@@ -199,6 +202,8 @@ public partial class MainWindow : Window
             CodeBox.Focus();
         }
         _wasPairing = _session.Pairing;
+        if (_session.SettingsVisible && !_wasSettings) _session.ReleasePhysicalKeys();
+        _wasSettings = _session.SettingsVisible;
         if (ready && !_wasReady)
         {
             CloseMenu();
@@ -208,6 +213,13 @@ public partial class MainWindow : Window
         if (_hwnd != IntPtr.Zero) ApplyIme();
         if (ready) _hook.Install();
         else _hook.Uninstall();
+    }
+
+    protected override void OnDeactivated(EventArgs e)
+    {
+        _altDown = false;
+        _session.ReleaseForFocusLoss();
+        base.OnDeactivated(e);
     }
 
     void RebuildModes()
@@ -259,29 +271,32 @@ public partial class MainWindow : Window
 
     bool CaptureSystemKey(int vk, int scan, bool extended, bool down)
     {
-        if (!_session.Ready || SettingsOverlay.Visibility == Visibility.Visible) return false;
-        // Alt+F4 closes this window. Alt itself was swallowed, so the system no longer sees it.
-        if (down && vk == 0x73 && _session.AltHeld)
+        var remote = _session.Ready && !_menuOpen && SettingsOverlay.Visibility != Visibility.Visible;
+        var foreground = _hwnd != IntPtr.Zero && GetForegroundWindow() == _hwnd;
+        if (!foreground) _altDown = false;
+        else if (KeyCapturePolicy.IsAlt(vk)) _altDown = down;
+        var decision = KeyCapturePolicy.Decide(foreground, remote, vk, _altDown || (foreground && AltAsync()));
+        // Enter and Escape leave the Mac app switcher instead of typing on the Mac.
+        if (down && _session.CommandTabHeld && vk is 0x1B or 0x0D && decision == CaptureDecision.ForwardAndSwallow)
         {
-            Dispatcher.BeginInvoke(Close);
+            _session.ReleaseCommandTab();
             return true;
         }
+        if (decision == CaptureDecision.Pass) return false;
         var win = vk is 0x5B or 0x5C;
-        if (_menuOpen)
-        {
-            var altTab = vk == 0x09 && (GetAsyncKeyState(0x12) & 0x8000) != 0;
-            var ctrlEsc = vk == 0x1B && (GetAsyncKeyState(0x11) & 0x8000) != 0;
-            return win || altTab || ctrlEsc;
-        }
-        // Swallow every key here, before the Text Services Framework. A Korean IME otherwise
-        // consumes Shift (and sometimes Ctrl) and the Mac only sees the bare letter.
         _session.PhysicalScan(scan, extended || win, down);
-        return true;
+        // Swallow everything except Alt, so Windows still sees Alt go down and Alt+Tab can leave.
+        return decision == CaptureDecision.ForwardAndSwallow;
     }
+
+    bool AltAsync() =>
+        (GetAsyncKeyState(KeyCapturePolicy.VkMenu) & 0x8000) != 0 ||
+        (GetAsyncKeyState(KeyCapturePolicy.VkLMenu) & 0x8000) != 0 ||
+        (GetAsyncKeyState(KeyCapturePolicy.VkRMenu) & 0x8000) != 0;
 
     IntPtr WndProc(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
     {
-        if (msg == 0x020E && _session.Ready && !_menuOpen && SettingsOverlay.Visibility != Visibility.Visible)
+        if (msg == 0x020E && CapturingRemote && _hwnd != IntPtr.Zero && GetForegroundWindow() == _hwnd)
         {
             var bits = unchecked((int)(long)wParam);
             Screen.HorizontalWheel((short)((bits >> 16) & 0xFFFF));
@@ -293,8 +308,8 @@ public partial class MainWindow : Window
             handled = true;
             return IntPtr.Zero;
         }
-        var forwarding = _session.Ready && !_menuOpen && SettingsOverlay.Visibility != Visibility.Visible;
-        if (forwarding && msg is 0x0102 or 0x0103 or 0x0106 or 0x010D or 0x010E or 0x010F or 0x0281 or 0x0282 or 0x0286)
+        if (CapturingRemote && _hwnd != IntPtr.Zero && GetForegroundWindow() == _hwnd &&
+            msg is 0x0102 or 0x0103 or 0x0106 or 0x010D or 0x010E or 0x010F or 0x0281 or 0x0282 or 0x0286)
         {
             handled = true;
             return IntPtr.Zero;
@@ -302,12 +317,12 @@ public partial class MainWindow : Window
         return IntPtr.Zero;
     }
 
+    bool CapturingRemote => _session.Ready && !_menuOpen && SettingsOverlay.Visibility != Visibility.Visible;
+
     bool RouteKey(int msg, int vk, IntPtr lParam)
     {
         var down = msg is 0x0100 or 0x0104;
-        if (vk == 0x73 && down && (GetAsyncKeyState(0x12) & 0x8000) != 0) return false;
-        if (!_session.Ready) return false;
-        if (down && _session.CommandTabHeld && vk is 0x1B or 0x0D)
+        if (down && _session.CommandTabHeld && vk is 0x1B or 0x0D && CapturingRemote)
         {
             _session.ReleaseCommandTab();
             return true;
@@ -327,9 +342,14 @@ public partial class MainWindow : Window
             }
             return false;
         }
+        // The low-level hook already forwarded the key. Eating Alt here would break Alt+Tab.
+        if (_hook.IsInstalled) return false;
+        var altDown = _altDown || AltAsync();
+        var decision = KeyCapturePolicy.Decide(GetForegroundWindow() == _hwnd, CapturingRemote, vk, altDown);
+        if (decision == CaptureDecision.Pass) return false;
         var key = WindowsKeyMap.FromLParam(lParam);
         _session.PhysicalScan(key.Scan, key.Extended, down);
-        return true;
+        return decision == CaptureDecision.ForwardAndSwallow;
     }
 
     [DllImport("imm32.dll")]
@@ -337,4 +357,7 @@ public partial class MainWindow : Window
 
     [DllImport("user32.dll")]
     static extern short GetAsyncKeyState(int vKey);
+
+    [DllImport("user32.dll")]
+    static extern IntPtr GetForegroundWindow();
 }

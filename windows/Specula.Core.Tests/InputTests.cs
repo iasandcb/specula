@@ -101,6 +101,34 @@ public class InputTests
     }
 
     [Fact]
+    public void FocusLossReleasesShiftAndTheLetter()
+    {
+        var keys = new RemoteKeyboard();
+        keys.Press(0x2A, false, true);
+        keys.Press(0x1E, false, true);
+        var released = keys.ReleaseAll();
+        Assert.Contains(new KeyStroke('A', false), released);
+        Assert.Contains(new KeyStroke(0xffe1, false), released);
+        Assert.False(keys.ShiftHeld);
+        Assert.Equal(new[] { new KeyStroke('a', true) }, keys.Press(0x1E, false, true));
+    }
+
+    [Fact]
+    public void HookCapturesOnlyTheForegroundRemoteViewAndLetsAltTabOut()
+    {
+        Assert.Equal(CaptureDecision.Pass, KeyCapturePolicy.Decide(false, true, 0x2A, false));
+        Assert.Equal(CaptureDecision.Pass, KeyCapturePolicy.Decide(true, false, 0x1E, false));
+        Assert.Equal(CaptureDecision.ForwardAndSwallow, KeyCapturePolicy.Decide(true, true, 0x10, false));
+        Assert.Equal(CaptureDecision.ForwardAndSwallow, KeyCapturePolicy.Decide(true, true, 0x1E, true));
+        Assert.Equal(CaptureDecision.ForwardAndSwallow, KeyCapturePolicy.Decide(true, true, KeyCapturePolicy.VkTab, false));
+        Assert.Equal(CaptureDecision.ForwardAndPass, KeyCapturePolicy.Decide(true, true, KeyCapturePolicy.VkLMenu, false));
+        Assert.Equal(CaptureDecision.ForwardAndPass, KeyCapturePolicy.Decide(true, true, KeyCapturePolicy.VkRMenu, false));
+        Assert.Equal(CaptureDecision.Pass, KeyCapturePolicy.Decide(true, true, KeyCapturePolicy.VkTab, true));
+        Assert.Equal(CaptureDecision.Pass, KeyCapturePolicy.Decide(true, true, KeyCapturePolicy.VkF4, true));
+        Assert.Equal(CaptureDecision.Pass, KeyCapturePolicy.Decide(false, true, KeyCapturePolicy.VkTab, true));
+    }
+
+    [Fact]
     public void SharedModifiersSendOneEdge()
     {
         var latch = new ModifierLatch();
