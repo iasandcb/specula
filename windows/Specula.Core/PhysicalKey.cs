@@ -59,8 +59,21 @@ public static class WindowsKeyMap
 {
     public static int? Hid(int scanCode, bool extended)
     {
-        var table = extended ? Extended : Standard;
-        return table.TryGetValue(scanCode, out var hid) ? hid : null;
+        // Extended arrows and keypad share scan codes with the main block. Only those
+        // collisions live in the extended table. Shift is not one of them, but Windows 11
+        // sometimes sets the extended bit on left/right Shift; falling back keeps the modifier.
+        if (extended && Extended.TryGetValue(scanCode, out var extendedHid)) return extendedHid;
+        return Standard.TryGetValue(scanCode, out var hid) ? hid : null;
+    }
+
+    /// <summary>
+    /// Hardware scan codes from a window message. The low 32 bits match WM_KEYDOWN lParam:
+    /// scan in bits 16–23, extended flag in bit 24. Key-up sets bit 31, so the shift must be masked.
+    /// </summary>
+    public static (int Scan, bool Extended) FromLParam(nint lParam)
+    {
+        var bits = unchecked((int)(long)lParam);
+        return ((bits >> 16) & 0xFF, (bits & 0x01000000) != 0);
     }
 
     public static int? Keysym(int hid, bool shift, bool option, CommandMode mode)

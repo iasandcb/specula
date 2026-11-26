@@ -41,6 +41,63 @@ public class InputTests
         Assert.Equal(PhysicalKey.Command, WindowsKeyMap.Keysym(ctrl, false, false, CommandMode.ControlKey));
         Assert.Equal(0x0100201c, WindowsKeyMap.Keysym(WindowsKeyMap.Hid(0x1A, false)!.Value, false, true, CommandMode.WindowsKey));
         Assert.Null(WindowsKeyMap.Hid(0x5B, false));
+        Assert.Equal(0xE1, WindowsKeyMap.Hid(0x2A, false));
+        Assert.Equal(0xE5, WindowsKeyMap.Hid(0x36, false));
+        // Windows 11 can set the extended bit on Shift. It must still be a modifier.
+        Assert.Equal(0xE1, WindowsKeyMap.Hid(0x2A, true));
+        Assert.Equal(0xE5, WindowsKeyMap.Hid(0x36, true));
+        Assert.Equal(0xff52, WindowsKeyMap.Keysym(WindowsKeyMap.Hid(0x48, true)!.Value, false, false, CommandMode.WindowsKey));
+        Assert.Equal(0x60, WindowsKeyMap.Hid(0x48, false));
+    }
+
+    [Fact]
+    public void LParamKeepsShiftScanCodeOnKeyUp()
+    {
+        Assert.Equal((0x2A, false), WindowsKeyMap.FromLParam(0x002A0001));
+        Assert.Equal((0x36, false), WindowsKeyMap.FromLParam(0x00360001));
+        Assert.Equal((0x2A, true), WindowsKeyMap.FromLParam(0x012A0001));
+        Assert.Equal((0x2A, false), WindowsKeyMap.FromLParam(unchecked((nint)(int)0xC02A0001)));
+        Assert.Equal((0x1D, true), WindowsKeyMap.FromLParam(0x011D0001));
+    }
+
+    [Fact]
+    public void ShiftCtrlAltWinAndCapsAreSentAsModifierEdges()
+    {
+        var keys = new RemoteKeyboard();
+        Assert.Equal(new[] { new KeyStroke(0xffe1, true) }, keys.Press(0x2A, false, true));
+        Assert.Equal(new[] { new KeyStroke('A', true) }, keys.Press(0x1E, false, true));
+        Assert.Equal(new[] { new KeyStroke('A', false) }, keys.Press(0x1E, false, false));
+        Assert.Equal(new[] { new KeyStroke(0xffe1, false) }, keys.Press(0x2A, false, false));
+
+        Assert.Equal(new[] { new KeyStroke(0xffe2, true) }, keys.Press(0x36, true, true));
+        Assert.Equal(new[] { new KeyStroke('Q', true) }, keys.Press(0x10, false, true));
+        Assert.Empty(keys.Press(0x36, true, true));
+        Assert.Equal(new[] { new KeyStroke(0xffe2, false) }, keys.Press(0x36, false, false));
+
+        Assert.Equal(new[] { new KeyStroke(0xffe3, true) }, keys.Press(0x1D, false, true));
+        Assert.Equal(new[] { new KeyStroke(0xffe4, true) }, keys.Press(0x1D, true, true));
+        Assert.Equal(new[] { new KeyStroke(0xffe3, false) }, keys.Press(0x1D, false, false));
+        Assert.Equal(new[] { new KeyStroke(0xffe4, false) }, keys.Press(0x1D, true, false));
+
+        Assert.Equal(new[] { new KeyStroke(PhysicalKey.Option, true) }, keys.Press(0x38, false, true));
+        Assert.Empty(keys.Press(0x38, true, true));
+        Assert.Empty(keys.Press(0x38, false, false));
+        Assert.Equal(new[] { new KeyStroke(PhysicalKey.Option, false) }, keys.Press(0x38, true, false));
+
+        Assert.Equal(new[] { new KeyStroke(PhysicalKey.Command, true) }, keys.Press(0x5B, true, true));
+        Assert.Empty(keys.Press(0x5C, true, true));
+        Assert.Empty(keys.Press(0x5B, true, false));
+        Assert.Equal(new[] { new KeyStroke(PhysicalKey.Command, false) }, keys.Press(0x5C, true, false));
+
+        Assert.Equal(new[] { new KeyStroke(0xffe5, true) }, keys.Press(0x3A, false, true));
+        Assert.Empty(keys.Press(0x3A, false, true));
+        Assert.Equal(new[] { new KeyStroke(0xffe5, false) }, keys.Press(0x3A, false, false));
+
+        var commandFromCtrl = new RemoteKeyboard { Mode = CommandMode.ControlKey };
+        Assert.Equal(new[] { new KeyStroke(0xffe1, true) }, commandFromCtrl.Press(0x2A, false, true));
+        Assert.Equal(new[] { new KeyStroke(PhysicalKey.Command, true) }, commandFromCtrl.Press(0x1D, false, true));
+        Assert.Equal(new[] { new KeyStroke('C', true) }, commandFromCtrl.Press(0x2E, false, true));
+        Assert.Equal(new[] { new KeyStroke(0xffe1, false) }, commandFromCtrl.Press(0x2A, false, false));
     }
 
     [Fact]

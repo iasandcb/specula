@@ -10,9 +10,7 @@ public sealed class SessionController : IDisposable
 {
     readonly ISecretStore _secrets;
     readonly SynchronizationContext _ui;
-    readonly Dictionary<int, int> _held = new();
-    readonly ModifierLatch _command = new();
-    readonly ModifierLatch _option = new();
+    readonly RemoteKeyboard _keys = new();
 
     Channel<Outbound>? _outbound;
     RfbClient? _client;
@@ -31,6 +29,7 @@ public sealed class SessionController : IDisposable
         SavedUsername = secrets.Get("username:" + SavedHost) ?? "";
         SavedPassword = secrets.Get("password:" + SavedHost) ?? "";
         CommandMode = secrets.Get("commandMode") == "ctrl" ? CommandMode.ControlKey : CommandMode.WindowsKey;
+        _keys.Mode = CommandMode;
     }
 
     public string SavedHost { get; }
@@ -42,8 +41,9 @@ public sealed class SessionController : IDisposable
     public bool Ready { get; private set; }
     public string Status { get; private set; } = "맥에 연결할 준비가 되었습니다";
     public string Error { get; private set; } = "";
-    public bool SoftwareOption { get; private set; }
-    public bool CommandTabHeld { get; private set; }
+    public bool SoftwareOption => _keys.SoftwareOption;
+    public bool CommandTabHeld => _keys.CommandTabHeld;
+    public bool AltHeld => _keys.AltHeld;
     public bool Portrait { get; private set; }
     public bool Busy { get; private set; }
     public bool Pairing { get; private set; }
@@ -95,15 +95,12 @@ public sealed class SessionController : IDisposable
         Ready = false;
         Error = "";
         Status = "맥에 접속 중…";
-        SoftwareOption = false;
-        CommandTabHeld = false;
         Portrait = false;
         SettingsVisible = false;
         Pairing = false;
         Snapshot = null;
-        _held.Clear();
-        _command.Clear();
-        _option.Clear();
+        _keys.Reset();
+        _keys.Mode = CommandMode;
         Notify();
 
         var client = new RfbClient();
@@ -187,50 +184,23 @@ public sealed class SessionController : IDisposable
     public void PhysicalScan(int scan, bool extended, bool down)
     {
         if (!Ready) return;
-        if (WindowsKeyMap.Hid(scan, extended) is not int hid) return;
-        if (!down)
-        {
-            if (_held.Remove(hid, out var symbol)) ReleaseSymbol(hid, symbol);
-            return;
-        }
-        if (_held.TryGetValue(hid, out var repeat))
-        {
-            if (!IsModifier(repeat)) Enqueue(Outbound.KeyEvent(repeat, true));
-            return;
-        }
-        var symbolNew = WindowsKeyMap.Keysym(hid, ShiftHeld, _option.IsDown, CommandMode);
-        if (symbolNew is not int sym) return;
-        _held[hid] = sym;
-        if (sym is PhysicalKey.Command or PhysicalKey.Option)
-        {
-            var edge = Latch(sym).Set("hid:" + hid, true);
-            if (edge is bool wire) Enqueue(Outbound.KeyEvent(sym, wire));
-        }
-        else Enqueue(Outbound.KeyEvent(sym, true));
+        Send(_keys.Press(scan, extended, down));
     }
 
-    public void ReleasePhysicalKeys()
-    {
-        foreach (var pair in _held.ToArray())
-        {
-            _held.Remove(pair.Key);
-            ReleaseSymbol(pair.Key, pair.Value);
-        }
-    }
+    public void ReleasePhysicalKeys() => Send(_keys.ReleasePhysical());
 
     public void ToggleSoftwareOption()
     {
         if (!Ready) return;
-        SoftwareOption = !SoftwareOption;
-        var edge = _option.Set("software", SoftwareOption);
-        if (edge is bool down) Enqueue(Outbound.KeyEvent(PhysicalKey.Option, down));
+        Send(_keys.ToggleSoftwareOption());
         Notify();
     }
 
     public void ToggleCommandMode()
     {
-        ReleasePhysicalKeys();
+        Send(_keys.ReleasePhysical());
         CommandMode = CommandMode == CommandMode.WindowsKey ? CommandMode.ControlKey : CommandMode.WindowsKey;
+        _keys.Mode = CommandMode;
         _secrets.Put("commandMode", CommandMode == CommandMode.WindowsKey ? "windows" : "ctrl");
         Notify();
     }
@@ -247,24 +217,16 @@ public sealed class SessionController : IDisposable
     public void PressCommandTab()
     {
         if (!Ready) return;
-        if (!CommandTabHeld)
-        {
-            CommandTabHeld = true;
-            var edge = _command.Set("tab", true);
-            if (edge is bool down) Enqueue(Outbound.KeyEvent(PhysicalKey.Command, down));
-            Enqueue(Outbound.Delay(40));
-        }
-        Enqueue(Outbound.KeyEvent(PhysicalKey.Tab, true));
-        Enqueue(Outbound.KeyEvent(PhysicalKey.Tab, false));
+        Send(_keys.BeginCommandTab(out var pause));
+        if (pause) Enqueue(Outbound.Delay(40));
+        Send(_keys.TabStroke());
         Notify();
     }
 
     public void ReleaseCommandTab()
     {
         if (!CommandTabHeld) return;
-        CommandTabHeld = false;
-        var edge = _command.Set("tab", false);
-        if (edge is bool down) Enqueue(Outbound.KeyEvent(PhysicalKey.Command, down));
+        Send(_keys.ReleaseCommandTab());
         Notify();
     }
 
@@ -484,13 +446,9 @@ public sealed class SessionController : IDisposable
         SettingsVisible = false;
         Pairing = false;
         Busy = false;
-        SoftwareOption = false;
-        CommandTabHeld = false;
         Portrait = false;
         Snapshot = null;
-        _held.Clear();
-        _command.Clear();
-        _option.Clear();
+        _keys.Reset();
         _heartbeat?.Cancel();
         _client = null;
         _display?.Dispose();
@@ -508,38 +466,12 @@ public sealed class SessionController : IDisposable
         Notify();
     }
 
-    void ReleaseEverything()
+    void ReleaseEverything() => Send(_keys.ReleaseAll());
+
+    void Send(List<KeyStroke> strokes)
     {
-        ReleasePhysicalKeys();
-        if (SoftwareOption)
-        {
-            SoftwareOption = false;
-            var edge = _option.Set("software", false);
-            if (edge is bool down) Enqueue(Outbound.KeyEvent(PhysicalKey.Option, down));
-        }
-        if (CommandTabHeld)
-        {
-            CommandTabHeld = false;
-            var edge = _command.Set("tab", false);
-            if (edge is bool down) Enqueue(Outbound.KeyEvent(PhysicalKey.Command, down));
-        }
+        foreach (var stroke in strokes) Enqueue(Outbound.KeyEvent(stroke.Symbol, stroke.Down));
     }
-
-    void ReleaseSymbol(int hid, int symbol)
-    {
-        if (symbol is PhysicalKey.Command or PhysicalKey.Option)
-        {
-            var edge = Latch(symbol).Set("hid:" + hid, false);
-            if (edge is bool down) Enqueue(Outbound.KeyEvent(symbol, down));
-        }
-        else Enqueue(Outbound.KeyEvent(symbol, false));
-    }
-
-    ModifierLatch Latch(int symbol) => symbol == PhysicalKey.Command ? _command : _option;
-    bool ShiftHeld => _held.Keys.Any(WindowsKeyMap.IsShift);
-
-    static bool IsModifier(int symbol) => symbol is
-        PhysicalKey.Command or PhysicalKey.Option or 0xffe1 or 0xffe2 or 0xffe3 or 0xffe4 or 0xffe5;
 
     void Enqueue(Outbound item) => _outbound?.Writer.TryWrite(item);
 

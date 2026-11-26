@@ -26,6 +26,9 @@ public partial class MainWindow : Window
         // Frames never flow through StateChanged. The menu buttons above are the XAML instances.
         _session.Frame += frame => Screen.Present(frame.Width, frame.Height, frame.Rgba);
         Screen.Pointer += (x, y, buttons) => _session.Pointer(x, y, buttons);
+        // The remote surface never composes text. The connect form's fields keep the IME.
+        InputMethod.SetIsInputMethodEnabled(Screen, false);
+        InputMethod.SetIsInputMethodSuspended(Screen, true);
         _hook.Capture = CaptureSystemKey;
         HostBox.Text = _session.SavedHost;
         PortBox.Text = _session.SavedPort;
@@ -257,11 +260,22 @@ public partial class MainWindow : Window
     bool CaptureSystemKey(int vk, int scan, bool extended, bool down)
     {
         if (!_session.Ready || SettingsOverlay.Visibility == Visibility.Visible) return false;
+        // Alt+F4 closes this window. Alt itself was swallowed, so the system no longer sees it.
+        if (down && vk == 0x73 && _session.AltHeld)
+        {
+            Dispatcher.BeginInvoke(Close);
+            return true;
+        }
         var win = vk is 0x5B or 0x5C;
-        var altTab = vk == 0x09 && (GetAsyncKeyState(0x12) & 0x8000) != 0;
-        var ctrlEsc = vk == 0x1B && (GetAsyncKeyState(0x11) & 0x8000) != 0;
-        if (!win && !altTab && !ctrlEsc) return false;
-        if (!_menuOpen) _session.PhysicalScan(scan, extended || win, down);
+        if (_menuOpen)
+        {
+            var altTab = vk == 0x09 && (GetAsyncKeyState(0x12) & 0x8000) != 0;
+            var ctrlEsc = vk == 0x1B && (GetAsyncKeyState(0x11) & 0x8000) != 0;
+            return win || altTab || ctrlEsc;
+        }
+        // Swallow every key here, before the Text Services Framework. A Korean IME otherwise
+        // consumes Shift (and sometimes Ctrl) and the Mac only sees the bare letter.
+        _session.PhysicalScan(scan, extended || win, down);
         return true;
     }
 
@@ -313,8 +327,8 @@ public partial class MainWindow : Window
             }
             return false;
         }
-        var bits = unchecked((int)(long)lParam);
-        _session.PhysicalScan((bits >> 16) & 0xFF, (bits & 0x01000000) != 0, down);
+        var key = WindowsKeyMap.FromLParam(lParam);
+        _session.PhysicalScan(key.Scan, key.Extended, down);
         return true;
     }
 

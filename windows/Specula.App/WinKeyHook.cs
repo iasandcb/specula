@@ -3,8 +3,9 @@ using System.Runtime.InteropServices;
 namespace Specula;
 
 /// <summary>
-/// Low-level hook so the Windows key does not open the Start menu, and Alt+Tab / Ctrl+Esc stay
-/// with the remote session, while this window is connected. It is installed only for that time.
+/// Low-level hook installed while the session is connected. It runs before the IME, so Shift and
+/// the other modifiers are forwarded as raw scan codes. Swallowing the key keeps the Windows
+/// key, Alt+Tab, and Ctrl+Esc inside the remote session.
 /// </summary>
 public sealed class WinKeyHook : IDisposable
 {
