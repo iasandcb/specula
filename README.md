@@ -1,6 +1,6 @@
 # Specula
 
-맥의 기본 화면 공유에 접속하는 아이폰 앱의 첫 시제품입니다. 같은 저장소에 안드로이드 클라이언트도 포함되어 있습니다. iOS 17 이상, SwiftUI/UIKit, Network.framework를 사용합니다. 계정 인증의 큰 정수 연산에 BigInt 5.7.0을 사용합니다.
+맥의 기본 화면 공유에 접속하는 아이폰 앱의 첫 시제품입니다. 같은 저장소에 안드로이드 클라이언트와 윈도우 클라이언트도 포함되어 있습니다. iOS 17 이상, SwiftUI/UIKit, Network.framework를 사용합니다. 계정 인증의 큰 정수 연산에 BigInt 5.7.0을 사용합니다.
 
 ## 실행
 
@@ -33,6 +33,39 @@ cd android
 하드웨어 키보드는 Android 입력기를 거치지 않고, 키 위치를 US QWERTY 기준 X11 키 기호로 바로 전달합니다. Alt는 맥 Command로, Windows 키는 Option으로 보내며 Control은 그대로입니다. 오른쪽 위 ⋯ 메뉴에서 키보드, 입력기 전환, ⌘Tab, 해상도, 화면 회전, 연결 종료를 사용합니다. ⌘Tab은 Command를 누른 채로 두고, 같은 항목을 다시 누르면 다음 앱으로 이동합니다.
 
 더 자세한 빌드와 동작 설명은 `android/README.md`를 참고하세요.
+
+## 윈도우 클라이언트
+
+Windows 10/11 데스크톱 뷰어입니다. .NET 8 WPF이며, 프로젝트는 `windows/`에 있습니다. 맥 쪽 프로토콜과 Specula Display 보조 앱은 바꾸지 않습니다. 화면 공유는 TCP 5900, 해상도·회전 보조 앱은 TCP 5901입니다.
+
+.NET 8 SDK가 필요합니다. 저장소 루트에서 실행합니다.
+
+```sh
+dotnet test windows/Specula.Windows.sln -c Release
+dotnet run --project windows/Specula.App/Specula.App.csproj -c Release
+```
+
+`dotnet run`은 Windows에서만 앱을 띄웁니다. Linux나 macOS에서는 WPF 프로젝트를 컴파일만 할 수 있습니다. `windows/Specula.App/Specula.App.csproj`의 `EnableWindowsTargeting`이 그 경로를 엽니다.
+
+```sh
+dotnet test windows/Specula.Core.Tests/Specula.Core.Tests.csproj -c Release
+dotnet build windows/Specula.App/Specula.App.csproj -c Release
+```
+
+프로토콜 단위 테스트는 `Specula.Core`에 있고 Windows 없이 돌아갑니다. GitHub Actions `windows` 워크플로는 `windows-latest`에서 테스트와 `win-x64` 자체 포함 게시를 하고, 결과 폴더를 아티팩트로 올립니다.
+
+1. 맥에서 화면 공유를 켜고, 보조 기능을 쓰려면 Specula Display를 실행합니다.
+2. 윈도우 앱에 맥 주소, 포트(기본 5900), 맥 사용자 이름, 로그인 암호를 입력하고 **연결**을 누릅니다. 사용자 이름을 비우면 VNC 암호로 접속합니다.
+3. 화면은 창에 맞춰 보이며, ⋯ 메뉴의 **화면 채우기** / **전체 화면 보기**로 맞춤과 채우기를 바꿉니다.
+4. 마우스로 이동·왼쪽 클릭·오른쪽 클릭·드래그·휠 스크롤을 맥에 보냅니다.
+5. 하드웨어 키는 스캔 코드(US QWERTY 위치)로 맥에 전달합니다. 세벌식 조합은 맥 입력기가 하고, 연결된 동안 Windows IME는 그 창에서 떼어 둡니다. 오른쪽 위 **⋯** 메뉴에서 **입력기 전환**(Control-Space), **⌥ Option**, **⌘Tab**, **⌘ 키: Windows** / **⌘ 키: Ctrl**을 고릅니다. Windows 키 모드에서는 Windows 키가 Command, Alt가 Option입니다. Ctrl 키 모드에서는 Ctrl이 Command이고 Windows 키와 Alt가 Option입니다.
+6. **맥 해상도**와 **세로 모드** / **가로 모드**는 Specula Display의 6자리 연결 코드를 한 번 받습니다. 코드와 토큰, 주소, 암호는 현재 Windows 계정의 DPAPI로 저장합니다.
+
+연결된 화면에는 아래 막대가 없습니다. 오른쪽 위 **⋯** 하나만 두고, 그 메뉴는 창을 만들 때 한 번만 만듭니다. 화면 프레임은 비트맵만 갈아끼우므로 메뉴가 프레임마다 다시 만들어지지 않습니다.
+
+글자와 버튼은 크게 잡았습니다. 메뉴 항목 높이는 60px 이상, **⋯** 버튼은 76×76px입니다.
+
+실기기에서 아직 확인하지 못한 항목은 맥과의 실제 접속, Windows IME를 끈 세벌식 입력, Windows 키·Alt+Tab이 로컬로 빠지지 않는지, 고해상도 스크롤과 DPAPI 저장입니다. 프로토콜 테스트와 WPF 컴파일은 그 확인을 대신하지 않습니다.
 
 ## 구현 범위
 
