@@ -1,0 +1,146 @@
+<Window x:Class="Specula.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:local="clr-namespace:Specula"
+        Title="스페큘라"
+        Width="1180" Height="820"
+        MinWidth="960" MinHeight="680"
+        FontFamily="Malgun Gothic, Segoe UI"
+        FontSize="22"
+        Background="White"
+        Foreground="#1A1A1A"
+        UseLayoutRounding="True"
+        SnapsToDevicePixels="True"
+        TextOptions.TextFormattingMode="Display"
+        TextOptions.TextRenderingMode="ClearType">
+    <Window.Resources>
+        <Style x:Key="Field" TargetType="TextBox">
+            <Setter Property="FontSize" Value="24"/>
+            <Setter Property="MinHeight" Value="56"/>
+            <Setter Property="Padding" Value="12,6"/>
+            <Setter Property="VerticalContentAlignment" Value="Center"/>
+        </Style>
+        <Style x:Key="MenuItem" TargetType="Button">
+            <Setter Property="FontSize" Value="22"/>
+            <Setter Property="MinHeight" Value="60"/>
+            <Setter Property="Padding" Value="16,8"/>
+            <Setter Property="Margin" Value="0,2"/>
+            <Setter Property="HorizontalContentAlignment" Value="Left"/>
+            <Setter Property="Background" Value="White"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Plate" Background="{TemplateBinding Background}" CornerRadius="8" Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}" VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Plate" Property="Background" Value="#F2F2F2"/>
+                            </Trigger>
+                            <Trigger Property="IsKeyboardFocused" Value="True">
+                                <Setter TargetName="Plate" Property="Background" Value="#E6E6E6"/>
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter Property="Opacity" Value="0.45"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+    </Window.Resources>
+    <Grid>
+        <ScrollViewer x:Name="ConnectView" VerticalScrollBarVisibility="Auto">
+            <StackPanel MaxWidth="640" Margin="32" HorizontalAlignment="Center">
+                <TextBlock Text="스페큘라" FontSize="40" FontWeight="SemiBold" Margin="0,24,0,0"/>
+                <TextBlock Text="맥 화면 공유" FontSize="26" Margin="0,4,0,20" Foreground="#444"/>
+                <TextBlock Text="맥 주소" Margin="0,8,0,6"/>
+                <DockPanel>
+                    <Button DockPanel.Dock="Right" Content="불러오기" MinWidth="140" MinHeight="56" Margin="12,0,0,0" FontSize="22" Click="LoadClick"/>
+                    <TextBox x:Name="HostBox" Style="{StaticResource Field}"/>
+                </DockPanel>
+                <TextBlock Text="포트" Margin="0,16,0,6"/>
+                <TextBox x:Name="PortBox" Style="{StaticResource Field}" Width="180" HorizontalAlignment="Left"/>
+                <TextBlock Text="맥 사용자 이름" Margin="0,16,0,6"/>
+                <TextBox x:Name="UserBox" Style="{StaticResource Field}"/>
+                <TextBlock Text="암호" Margin="0,16,0,6"/>
+                <PasswordBox x:Name="PasswordBox" FontSize="24" Height="56" Padding="12,6"/>
+                <TextBlock TextWrapping="Wrap" Margin="0,16,0,0" Foreground="#333"
+                           Text="맥의 화면 공유를 켜고, 사용자 이름과 로그인 암호를 입력하세요. 사용자 이름을 비우면 VNC 암호로 접속합니다. 해상도와 화면 회전은 연결 뒤 ⋯ 메뉴에서 Specula Display의 6자리 코드를 입력합니다."/>
+                <TextBlock TextWrapping="Wrap" Margin="0,8,0,0" Foreground="#555"
+                           Text="화면과 입력은 암호화되지 않습니다. 같은 네트워크나 VPN에서 사용하세요. 주소와 암호는 이 Windows 계정으로만 보호되어 저장됩니다."/>
+                <Button x:Name="ConnectButton" Content="연결" MinHeight="64" FontSize="24" Margin="0,24,0,0" IsDefault="True" Click="ConnectClick"/>
+                <TextBlock x:Name="StatusText" TextWrapping="Wrap" Margin="0,16,0,0" Foreground="#444"/>
+                <TextBlock x:Name="ErrorText" TextWrapping="Wrap" Margin="0,8,0,24" Foreground="#9B1B30" Visibility="Collapsed"/>
+            </StackPanel>
+        </ScrollViewer>
+
+        <Grid x:Name="SessionView" Visibility="Collapsed" Background="Black">
+            <local:RemoteScreen x:Name="Screen"/>
+            <Border x:Name="MenuShield" Background="Transparent" Visibility="Collapsed" MouseDown="ShieldDown" Panel.ZIndex="1"/>
+            <StackPanel x:Name="SwitcherBar" Orientation="Horizontal" HorizontalAlignment="Left" VerticalAlignment="Top" Margin="16" Visibility="Collapsed" Panel.ZIndex="2">
+                <Button Content="Tab" MinWidth="96" MinHeight="64" FontSize="22" Margin="0,0,8,0" Click="SwitcherTabClick"/>
+                <Button Content="⌘ 해제" MinWidth="140" MinHeight="64" FontSize="22" Click="SwitcherReleaseClick"/>
+            </StackPanel>
+            <Border x:Name="MenuPanel" Visibility="Collapsed" HorizontalAlignment="Right" VerticalAlignment="Top"
+                    Margin="16,104,16,16" MinWidth="340" MaxWidth="460" Background="White" CornerRadius="12"
+                    Padding="8" BorderBrush="#222" BorderThickness="1" Panel.ZIndex="2">
+                <Border.Effect>
+                    <DropShadowEffect BlurRadius="18" ShadowDepth="1" Opacity="0.3"/>
+                </Border.Effect>
+                <ScrollViewer VerticalScrollBarVisibility="Auto" MaxHeight="560">
+                    <StackPanel>
+                        <Button x:Name="OptionItem" Style="{StaticResource MenuItem}" Click="OptionClick"/>
+                        <Button x:Name="InputItem" Style="{StaticResource MenuItem}" Content="입력기 전환" Click="InputClick"/>
+                        <Button x:Name="TabItem" Style="{StaticResource MenuItem}" Content="⌘Tab" Click="TabClick"/>
+                        <Border Height="1" Background="#DDD" Margin="8,6"/>
+                        <Button x:Name="ResolutionItem" Style="{StaticResource MenuItem}" Content="맥 해상도" Click="ResolutionClick"/>
+                        <Button x:Name="OrientationItem" Style="{StaticResource MenuItem}" Click="OrientationClick"/>
+                        <Button x:Name="FillItem" Style="{StaticResource MenuItem}" Click="FillClick"/>
+                        <Button x:Name="CommandKeyItem" Style="{StaticResource MenuItem}" Click="CommandKeyClick"/>
+                        <Border Height="1" Background="#DDD" Margin="8,6"/>
+                        <Button x:Name="DisconnectItem" Style="{StaticResource MenuItem}" Content="연결 종료" Foreground="#9B1B30" Click="DisconnectClick"/>
+                    </StackPanel>
+                </ScrollViewer>
+            </Border>
+            <Button x:Name="MenuButton" Content="⋯" Width="76" Height="76" FontSize="40" Margin="16"
+                    HorizontalAlignment="Right" VerticalAlignment="Top" Background="White" BorderBrush="#222" BorderThickness="2"
+                    ToolTip="세션 메뉴" AutomationProperties.Name="세션 메뉴" Panel.ZIndex="3" Click="MenuClick"/>
+            <Border x:Name="SessionBanner" Visibility="Collapsed" HorizontalAlignment="Center" VerticalAlignment="Bottom"
+                    Margin="16" Background="#FFFFFFF2" CornerRadius="10" Padding="16,10" MaxWidth="720" Panel.ZIndex="2">
+                <TextBlock x:Name="SessionError" TextWrapping="Wrap" Foreground="#9B1B30" FontSize="22"/>
+            </Border>
+        </Grid>
+
+        <Grid x:Name="SettingsOverlay" Visibility="Collapsed" Background="#99000000">
+            <Border Background="White" CornerRadius="16" Padding="28" MaxWidth="560" MaxHeight="720"
+                    HorizontalAlignment="Center" VerticalAlignment="Center">
+                <DockPanel>
+                    <TextBlock x:Name="SettingsTitle" DockPanel.Dock="Top" FontSize="32" FontWeight="SemiBold" Margin="0,0,0,12"/>
+                    <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,16,0,0">
+                        <Button x:Name="PairButton" Content="연결" MinWidth="120" MinHeight="56" FontSize="22" Margin="0,0,8,0" Click="PairClick"/>
+                        <Button Content="닫기" MinWidth="120" MinHeight="56" FontSize="22" Click="CloseSettingsClick"/>
+                    </StackPanel>
+                    <ScrollViewer VerticalScrollBarVisibility="Auto">
+                        <StackPanel>
+                            <StackPanel x:Name="PairPanel">
+                                <TextBlock TextWrapping="Wrap" Text="맥의 Specula Display에 표시된 연결 코드를 입력하세요."/>
+                                <TextBlock Text="연결 코드" Margin="0,16,0,6"/>
+                                <TextBox x:Name="CodeBox" FontSize="32" MinHeight="64" Padding="12,6" MaxLength="6" TextChanged="CodeChanged"/>
+                            </StackPanel>
+                            <StackPanel x:Name="ModePanel" Visibility="Collapsed">
+                                <TextBlock x:Name="CurrentModeText" TextWrapping="Wrap" Margin="0,0,0,8"/>
+                                <StackPanel x:Name="ModeList"/>
+                                <Button Content="원래 해상도 복원" MinHeight="60" FontSize="22" HorizontalContentAlignment="Left" Margin="0,8,0,0" Click="RestoreClick"/>
+                            </StackPanel>
+                            <TextBlock x:Name="BusyText" Text="잠시만요…" Margin="0,12,0,0" Visibility="Collapsed"/>
+                            <TextBlock x:Name="DialogError" TextWrapping="Wrap" Foreground="#9B1B30" Margin="0,12,0,0"/>
+                        </StackPanel>
+                    </ScrollViewer>
+                </DockPanel>
+            </Border>
+        </Grid>
+    </Grid>
+</Window>

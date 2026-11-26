@@ -6,6 +6,10 @@ xcuserdata/
 
 Build/
 
+windows/**/bin/
+windows/**/obj/
+windows/publish/
+
 # Release signing material (kept outside the repo; never commit)
 *.jks
 *.keystore

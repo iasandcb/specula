@@ -1,0 +1,205 @@
+namespace Specula.Tests;
+
+public class InputTests
+{
+    [Fact]
+    public void PhysicalKeysPreserveMacCommandOptionAndLatinPositions()
+    {
+        Assert.Equal(0xffeb, PhysicalKey.Symbol(226));
+        Assert.Equal(0xffe7, PhysicalKey.Symbol(230));
+        Assert.Equal(0xffeb, PhysicalKey.Symbol(227));
+        Assert.Equal(0x0100201c, PhysicalKey.Symbol(47, option: true));
+        Assert.Equal(0x01002018, PhysicalKey.Symbol(48, option: true));
+        Assert.Equal(0x0100201d, PhysicalKey.Symbol(47, shift: true, option: true));
+        Assert.Equal(0x01002019, PhysicalKey.Symbol(48, shift: true, option: true));
+        Assert.Equal(91, PhysicalKey.Symbol(47));
+        Assert.Equal(93, PhysicalKey.Symbol(48));
+        Assert.Equal(0xff51, PhysicalKey.Symbol(80, option: true));
+        Assert.Equal(0x72, PhysicalKey.Symbol(21));
+        Assert.Equal(0x52, PhysicalKey.Symbol(21, shift: true));
+        Assert.Equal(0x21, PhysicalKey.Symbol(30, shift: true));
+        Assert.Null(PhysicalKey.Symbol(999));
+    }
+
+    [Fact]
+    public void WindowsScanCodesUseUsPositionsAndCommandChoice()
+    {
+        Assert.Equal('q', WindowsKeyMap.Keysym(WindowsKeyMap.Hid(0x10, false)!.Value, false, false, CommandMode.WindowsKey));
+        Assert.Equal('Q', WindowsKeyMap.Keysym(WindowsKeyMap.Hid(0x10, false)!.Value, true, false, CommandMode.WindowsKey));
+        Assert.Equal('a', WindowsKeyMap.Keysym(WindowsKeyMap.Hid(0x1E, false)!.Value, false, false, CommandMode.WindowsKey));
+        Assert.Equal(0xffbe, WindowsKeyMap.Keysym(WindowsKeyMap.Hid(0x3B, false)!.Value, false, false, CommandMode.WindowsKey));
+        Assert.Equal(0xff52, WindowsKeyMap.Keysym(WindowsKeyMap.Hid(0x48, true)!.Value, false, false, CommandMode.WindowsKey));
+        Assert.Equal(0xff08, WindowsKeyMap.Keysym(WindowsKeyMap.Hid(0x0E, false)!.Value, true, false, CommandMode.WindowsKey));
+
+        var win = WindowsKeyMap.Hid(0x5B, true)!.Value;
+        var ctrl = WindowsKeyMap.Hid(0x1D, false)!.Value;
+        var alt = WindowsKeyMap.Hid(0x38, false)!.Value;
+        Assert.Equal(PhysicalKey.Command, WindowsKeyMap.Keysym(win, false, false, CommandMode.WindowsKey));
+        Assert.Equal(0xffe3, WindowsKeyMap.Keysym(ctrl, false, false, CommandMode.WindowsKey));
+        Assert.Equal(PhysicalKey.Option, WindowsKeyMap.Keysym(alt, false, false, CommandMode.WindowsKey));
+        Assert.Equal(PhysicalKey.Option, WindowsKeyMap.Keysym(win, false, false, CommandMode.ControlKey));
+        Assert.Equal(PhysicalKey.Command, WindowsKeyMap.Keysym(ctrl, false, false, CommandMode.ControlKey));
+        Assert.Equal(0x0100201c, WindowsKeyMap.Keysym(WindowsKeyMap.Hid(0x1A, false)!.Value, false, true, CommandMode.WindowsKey));
+        Assert.Null(WindowsKeyMap.Hid(0x5B, false));
+        Assert.Equal(0xE1, WindowsKeyMap.Hid(0x2A, false));
+        Assert.Equal(0xE5, WindowsKeyMap.Hid(0x36, false));
+        // Windows 11 can set the extended bit on Shift. It must still be a modifier.
+        Assert.Equal(0xE1, WindowsKeyMap.Hid(0x2A, true));
+        Assert.Equal(0xE5, WindowsKeyMap.Hid(0x36, true));
+        Assert.Equal(0xff52, WindowsKeyMap.Keysym(WindowsKeyMap.Hid(0x48, true)!.Value, false, false, CommandMode.WindowsKey));
+        Assert.Equal(0x60, WindowsKeyMap.Hid(0x48, false));
+    }
+
+    [Fact]
+    public void LParamKeepsShiftScanCodeOnKeyUp()
+    {
+        Assert.Equal((0x2A, false), WindowsKeyMap.FromLParam(0x002A0001));
+        Assert.Equal((0x36, false), WindowsKeyMap.FromLParam(0x00360001));
+        Assert.Equal((0x2A, true), WindowsKeyMap.FromLParam(0x012A0001));
+        Assert.Equal((0x2A, false), WindowsKeyMap.FromLParam(unchecked((nint)(int)0xC02A0001)));
+        Assert.Equal((0x1D, true), WindowsKeyMap.FromLParam(0x011D0001));
+    }
+
+    [Fact]
+    public void ShiftCtrlAltWinAndCapsAreSentAsModifierEdges()
+    {
+        var keys = new RemoteKeyboard();
+        Assert.Equal(new[] { new KeyStroke(0xffe1, true) }, keys.Press(0x2A, false, true));
+        Assert.Equal(new[] { new KeyStroke('A', true) }, keys.Press(0x1E, false, true));
+        Assert.Equal(new[] { new KeyStroke('A', false) }, keys.Press(0x1E, false, false));
+        Assert.Equal(new[] { new KeyStroke(0xffe1, false) }, keys.Press(0x2A, false, false));
+
+        Assert.Equal(new[] { new KeyStroke(0xffe2, true) }, keys.Press(0x36, true, true));
+        Assert.Equal(new[] { new KeyStroke('Q', true) }, keys.Press(0x10, false, true));
+        Assert.Empty(keys.Press(0x36, true, true));
+        Assert.Equal(new[] { new KeyStroke(0xffe2, false) }, keys.Press(0x36, false, false));
+
+        Assert.Equal(new[] { new KeyStroke(0xffe3, true) }, keys.Press(0x1D, false, true));
+        Assert.Equal(new[] { new KeyStroke(0xffe4, true) }, keys.Press(0x1D, true, true));
+        Assert.Equal(new[] { new KeyStroke(0xffe3, false) }, keys.Press(0x1D, false, false));
+        Assert.Equal(new[] { new KeyStroke(0xffe4, false) }, keys.Press(0x1D, true, false));
+
+        Assert.Equal(new[] { new KeyStroke(PhysicalKey.Option, true) }, keys.Press(0x38, false, true));
+        Assert.Empty(keys.Press(0x38, true, true));
+        Assert.Empty(keys.Press(0x38, false, false));
+        Assert.Equal(new[] { new KeyStroke(PhysicalKey.Option, false) }, keys.Press(0x38, true, false));
+
+        Assert.Equal(new[] { new KeyStroke(PhysicalKey.Command, true) }, keys.Press(0x5B, true, true));
+        Assert.Empty(keys.Press(0x5C, true, true));
+        Assert.Empty(keys.Press(0x5B, true, false));
+        Assert.Equal(new[] { new KeyStroke(PhysicalKey.Command, false) }, keys.Press(0x5C, true, false));
+
+        Assert.Equal(new[] { new KeyStroke(0xffe5, true) }, keys.Press(0x3A, false, true));
+        Assert.Empty(keys.Press(0x3A, false, true));
+        Assert.Equal(new[] { new KeyStroke(0xffe5, false) }, keys.Press(0x3A, false, false));
+
+        var commandFromCtrl = new RemoteKeyboard { Mode = CommandMode.ControlKey };
+        Assert.Equal(new[] { new KeyStroke(0xffe1, true) }, commandFromCtrl.Press(0x2A, false, true));
+        Assert.Equal(new[] { new KeyStroke(PhysicalKey.Command, true) }, commandFromCtrl.Press(0x1D, false, true));
+        Assert.Equal(new[] { new KeyStroke('C', true) }, commandFromCtrl.Press(0x2E, false, true));
+        Assert.Equal(new[] { new KeyStroke(0xffe1, false) }, commandFromCtrl.Press(0x2A, false, false));
+    }
+
+    [Fact]
+    public void FocusLossReleasesShiftAndTheLetter()
+    {
+        var keys = new RemoteKeyboard();
+        keys.Press(0x2A, false, true);
+        keys.Press(0x1E, false, true);
+        var released = keys.ReleaseAll();
+        Assert.Contains(new KeyStroke('A', false), released);
+        Assert.Contains(new KeyStroke(0xffe1, false), released);
+        Assert.False(keys.ShiftHeld);
+        Assert.Equal(new[] { new KeyStroke('a', true) }, keys.Press(0x1E, false, true));
+    }
+
+    [Fact]
+    public void HookCapturesOnlyTheForegroundRemoteViewAndLetsAltTabOut()
+    {
+        Assert.Equal(CaptureDecision.Pass, KeyCapturePolicy.Decide(false, true, 0x2A, false));
+        Assert.Equal(CaptureDecision.Pass, KeyCapturePolicy.Decide(true, false, 0x1E, false));
+        Assert.Equal(CaptureDecision.ForwardAndSwallow, KeyCapturePolicy.Decide(true, true, 0x10, false));
+        Assert.Equal(CaptureDecision.ForwardAndSwallow, KeyCapturePolicy.Decide(true, true, 0x1E, true));
+        Assert.Equal(CaptureDecision.ForwardAndSwallow, KeyCapturePolicy.Decide(true, true, KeyCapturePolicy.VkTab, false));
+        Assert.Equal(CaptureDecision.ForwardAndPass, KeyCapturePolicy.Decide(true, true, KeyCapturePolicy.VkLMenu, false));
+        Assert.Equal(CaptureDecision.ForwardAndPass, KeyCapturePolicy.Decide(true, true, KeyCapturePolicy.VkRMenu, false));
+        Assert.Equal(CaptureDecision.Pass, KeyCapturePolicy.Decide(true, true, KeyCapturePolicy.VkTab, true));
+        Assert.Equal(CaptureDecision.Pass, KeyCapturePolicy.Decide(true, true, KeyCapturePolicy.VkF4, true));
+        Assert.Equal(CaptureDecision.Pass, KeyCapturePolicy.Decide(false, true, KeyCapturePolicy.VkTab, true));
+    }
+
+    [Fact]
+    public void SharedModifiersSendOneEdge()
+    {
+        var latch = new ModifierLatch();
+        Assert.True(latch.Set("left", true));
+        Assert.Null(latch.Set("right", true));
+        Assert.True(latch.IsDown);
+        Assert.Null(latch.Set("left", false));
+        Assert.False(latch.Set("right", false));
+        Assert.False(latch.IsDown);
+    }
+
+    [Fact]
+    public void MenuLabelsMatchTheOtherClients()
+    {
+        Assert.Equal("⌥ Option 켜기", SessionMenuText.Option(false));
+        Assert.Equal("⌥ Option 끄기", SessionMenuText.Option(true));
+        Assert.Equal("입력기 전환", SessionMenuText.Input);
+        Assert.Equal("맥 해상도", SessionMenuText.Resolution);
+        Assert.Equal("화면 채우기", SessionMenuText.Fill(false));
+        Assert.Equal("전체 화면 보기", SessionMenuText.Fill(true));
+        Assert.Equal("세로 모드", SessionMenuText.Orientation(false));
+        Assert.Equal("가로 모드", SessionMenuText.Orientation(true));
+        Assert.Equal("연결 종료", SessionMenuText.Disconnect);
+        Assert.Equal("⌘ 키: Windows", SessionMenuText.CommandKey(CommandMode.WindowsKey));
+        Assert.Equal("⌘ 키: Ctrl", SessionMenuText.CommandKey(CommandMode.ControlKey));
+    }
+
+    [Fact]
+    public void FramebufferMappingLetterboxesFillsAndClamps()
+    {
+        var origin = PointerMapping.FramebufferPoint(0, 50, 200, 200, 100, 50, false, false);
+        Assert.Equal(new PointerMapping.Point(0, 0), origin);
+        Assert.Null(PointerMapping.FramebufferPoint(0, 0, 200, 200, 100, 50, false, false));
+        Assert.Equal(new PointerMapping.Point(0, 0), PointerMapping.FramebufferPoint(0, 0, 200, 200, 100, 50, false, true));
+        Assert.Equal(new PointerMapping.Point(50, 25), PointerMapping.FramebufferPoint(100, 100, 200, 200, 100, 50, false, false));
+        Assert.Equal(new PointerMapping.Point(99, 49), PointerMapping.FramebufferPoint(200, 150, 200, 200, 100, 50, false, true));
+        Assert.Equal(new PointerMapping.Point(10, 10), PointerMapping.FramebufferPoint(21.8, 70.9, 200, 200, 100, 50, false, false));
+        Assert.Equal(new PointerMapping.Point(25, 0), PointerMapping.FramebufferPoint(0, 0, 200, 200, 100, 50, true, false));
+        Assert.Null(PointerMapping.FramebufferPoint(1, 1, 0, 10, 10, 10, false, true));
+        Assert.Null(PointerMapping.DisplayedFrame(10, 10, 0, 10, false));
+    }
+
+    [Fact]
+    public void PointerMotionCollapsesAndButtonsStayImmediate()
+    {
+        var coalescer = new PointerCoalescer();
+        var first = coalescer.Submit(new PointerCoalescer.Sample(0, 0, 0), 0);
+        Assert.Equal(new[] { new PointerCoalescer.Sample(0, 0, 0) }, first.Send);
+        var moved = coalescer.Submit(new PointerCoalescer.Sample(4, 1, 0), 5);
+        Assert.Empty(moved.Send);
+        Assert.Equal(11, moved.FlushAfterMs);
+        Assert.Empty(coalescer.Submit(new PointerCoalescer.Sample(9, 2, 0), 8).Send);
+        Assert.Empty(coalescer.Flush(10).Send);
+        var flushed = coalescer.Flush(16);
+        Assert.Equal(new[] { new PointerCoalescer.Sample(9, 2, 0) }, flushed.Send);
+        Assert.Equal(new[] { new PointerCoalescer.Sample(9, 2, PointerButtons.Left) }, coalescer.Submit(new PointerCoalescer.Sample(9, 2, PointerButtons.Left), 17).Send);
+        Assert.Equal(new[] { new PointerCoalescer.Sample(9, 2, 0) }, coalescer.Submit(new PointerCoalescer.Sample(9, 2, 0), 17).Send);
+    }
+
+    [Fact]
+    public void WheelDetentsBecomeClicksAndKeepRemainder()
+    {
+        var remainder = 0;
+        Assert.Equal(0, Wheel.Consume(ref remainder, 60));
+        Assert.Equal(60, remainder);
+        Assert.Equal(1, Wheel.Consume(ref remainder, 60));
+        Assert.Equal(0, remainder);
+        Assert.Equal(new byte[] { PointerButtons.WheelUp, 0, PointerButtons.WheelRight, 0 }, Wheel.Masks(1, 1, 0));
+        Assert.Equal(new byte[] { (byte)(PointerButtons.Left | PointerButtons.WheelDown), PointerButtons.Left }, Wheel.Masks(0, -1, PointerButtons.Left));
+        remainder = 0;
+        Assert.Equal(Wheel.MaxClicks, Wheel.Consume(ref remainder, 120 * (Wheel.MaxClicks + 40)));
+        Assert.Equal(0, remainder);
+    }
+}
